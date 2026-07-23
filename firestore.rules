@@ -1,0 +1,44 @@
+rules_version = '2';
+
+// ============================================================
+//  Reglas de seguridad · Cuaderno Vivo Rayuela
+//  Publica estas reglas en: Firebase Console -> Firestore ->
+//  pestaña "Reglas" -> pega y "Publicar".
+// ============================================================
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // rol del usuario que hace la petición (lee su propio documento)
+    function myRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+
+    match /users/{userId} {
+      // Leer: cada quien su documento; la profesora, los de sus alumnas.
+      allow read: if isSignedIn() && (
+        request.auth.uid == userId ||
+        (myRole() == 'teacher' && resource.data.teacherId == request.auth.uid)
+      );
+
+      // Crear: la profesora se registra a sí misma, o crea alumnas suyas.
+      allow create: if isSignedIn() && (
+        request.auth.uid == userId ||
+        (myRole() == 'teacher' && request.resource.data.teacherId == request.auth.uid)
+      );
+
+      // Actualizar el propio documento sin cambiar rol ni profesora.
+      allow update: if isSignedIn() && request.auth.uid == userId
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.teacherId == resource.data.teacherId;
+
+      // La profesora edita o borra los documentos de sus alumnas.
+      allow update, delete: if isSignedIn()
+        && myRole() == 'teacher'
+        && resource.data.teacherId == request.auth.uid;
+    }
+  }
+}

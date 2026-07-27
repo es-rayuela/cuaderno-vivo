@@ -52,6 +52,7 @@ export function subscribeNotebook(uid, cb) {
         level: d.level || "",
         name: d.deckName || "Frases de las clases",
         date: d.date || "",
+        avgSec: typeof d.avgSec === "number" ? d.avgSec : null,
       },
       cards: Array.isArray(d.cards) ? d.cards : [],
     });
@@ -67,6 +68,7 @@ export async function saveNotebook(uid, { deck, cards }) {
       level: deck.level || "",
       deckName: deck.name || "",
       date: deck.date || "",
+      ...(typeof deck.avgSec === "number" ? { avgSec: deck.avgSec } : {}),
       cards: cards || [],
       updatedAt: Date.now(),
     },

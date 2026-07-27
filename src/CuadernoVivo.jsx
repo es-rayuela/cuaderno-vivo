@@ -38,9 +38,43 @@ const TYPES = ["traduccion", "correccion", "hueco", "eleccion", "frase_personal"
 
 /* ---------- utilidades ---------- */
 const DAY = 86400000;
+const MIN = 60 * 1000;
 const uid = () => "c" + Math.random().toString(36).slice(2, 9);
 
-const freshSchedule = () => ({ interval: 0, nextReview: null, timesReviewed: 0, lastRating: null });
+/* ---------- repetición espaciada (motor tipo SM-2 / Anki) ----------
+   Etapas de un cartón: new -> learning -> review, y review -> relearning
+   tras un fallo. Cada respuesta ajusta el "factor de facilidad" (ease) y,
+   con él, el próximo intervalo, teniendo en cuenta el historial del cartón. */
+const START_EASE = 2.5;    // facilidad inicial
+const MIN_EASE = 1.3;      // suelo del factor de facilidad
+const EASY_BONUS = 1.3;    // empujón extra al responder "Fácil"
+const HARD_FACTOR = 1.2;   // crecimiento pequeño al responder "Difícil"
+const GRAD_IVL = 1;        // días al graduarse (con "Bien")
+const EASY_IVL = 4;        // días al graduarse directo (con "Fácil")
+const LAPSE_FACTOR = 0.5;  // el intervalo se reduce a la mitad tras un fallo
+const MIN_IVL = 1;         // mínimo en días para etapa review
+const MAX_IVL = 365 * 10;  // techo ~10 años (permite meses y años)
+const LEARN_STEPS = [1, 10];   // minutos: pasos de aprendizaje de un cartón nuevo
+const RELEARN_STEPS = [10];    // minutos: pasos de reaprendizaje tras un fallo
+
+/* Las cuatro respuestas posibles del alumno. */
+const RATINGS = ["again", "hard", "good", "easy"];
+
+const freshSchedule = () => ({
+  createdAt: Date.now(), // fecha de creación
+  stage: "new",          // new | learning | review | relearning
+  step: 0,               // índice dentro de los pasos de (re)aprendizaje
+  ease: START_EASE,      // factor de facilidad
+  interval: 0,           // intervalo actual en días (etapa review)
+  reps: 0,               // aciertos consecutivos en review
+  timesReviewed: 0,      // total de revisiones
+  correct: 0,            // veces "Bien" o "Fácil"
+  lapses: 0,             // veces "No lo sé" estando en review
+  lastReview: null,      // fecha de la última revisión
+  nextReview: null,      // fecha de la próxima revisión
+  lastRating: null,      // última respuesta
+  history: [],           // historial individual: [{ t, r, ivl, e, st }]
+});
 
 /* ---------- código de clase (profesora → alumna) ---------- */
 const CODE_PREFIX = "RAYUELA1:";   // legado: base64 sin comprimir
@@ -235,15 +269,221 @@ function isDue(card, now) {
   return s.nextReview <= now;
 }
 
-function nextSchedule(sch, rating) {
-  const s = { interval: 0, timesReviewed: 0, ...(sch || {}) };
-  s.timesReviewed = (s.timesReviewed || 0) + 1;
-  s.lastRating = rating;
-  if (rating === "volver") s.interval = 0;
-  else if (rating === "casi") s.interval = 1;
-  else s.interval = s.interval && s.interval >= 1 ? Math.min(s.interval * 2, 60) : 2;
-  s.nextReview = Date.now() + s.interval * DAY;
+const clampIvl = (d) => Math.min(MAX_IVL, Math.max(MIN_IVL, Math.round(d)));
+
+/* pequeña dispersión (±5%) para que las cartas no se agolpen el mismo día */
+function fuzz(ivl) {
+  if (ivl < 3) return ivl;
+  const r = Math.max(1, Math.round(ivl * 0.05));
+  return clampIvl(ivl + Math.round((Math.random() * 2 - 1) * r));
+}
+
+/* Normaliza y migra un schedule antiguo al formato nuevo (con etapas y ease). */
+function normalizeSchedule(sch) {
+  const base = freshSchedule();
+  const s = { ...base, ...(sch || {}) };
+  if (!sch || !sch.stage) {
+    // migración desde el formato viejo { interval, nextReview, timesReviewed }
+    if (sch && sch.nextReview && (sch.interval || 0) >= 1) {
+      s.stage = "review";
+      s.interval = sch.interval;
+      s.reps = Math.max(1, sch.timesReviewed || 1);
+    } else if (sch && (sch.timesReviewed || 0) > 0) {
+      s.stage = "learning";
+      s.step = 0;
+    } else {
+      s.stage = "new";
+    }
+    s.ease = (sch && sch.ease) || START_EASE;
+    s.history = (sch && sch.history) || [];
+    s.correct = s.correct || 0;
+    s.lapses = s.lapses || 0;
+    s.createdAt = (sch && sch.createdAt) || Date.now();
+  }
+  if (typeof s.ease !== "number" || s.ease < MIN_EASE) s.ease = Math.max(MIN_EASE, s.ease || START_EASE);
   return s;
+}
+
+/* Motor de repetición espaciada (SM-2 con pasos de aprendizaje tipo Anki).
+   Calcula el siguiente estado del cartón según la respuesta y su historial.
+   Si preview=true no altera contadores ni historial (solo estima el intervalo). */
+function nextSchedule(sch, rating, preview = false) {
+  const now = Date.now();
+  const s = normalizeSchedule(sch);
+  const applyFuzz = preview ? (x) => x : fuzz;
+  const setNext = (ms) => { s.nextReview = now + ms; };
+
+  if (!preview) {
+    s.timesReviewed += 1;
+    s.lastRating = rating;
+    s.lastReview = now;
+    if (rating === "good" || rating === "easy") s.correct += 1;
+  }
+
+  if (s.stage === "new" || s.stage === "learning") {
+    s.stage = "learning";
+    if (rating === "again") {
+      s.step = 0;
+      setNext(LEARN_STEPS[0] * MIN);
+    } else if (rating === "hard") {
+      setNext((LEARN_STEPS[s.step] || LEARN_STEPS[0]) * MIN);
+    } else if (rating === "good") {
+      const step = s.step + 1;
+      if (step >= LEARN_STEPS.length) {
+        s.stage = "review"; s.step = 0; s.reps = 1; s.interval = GRAD_IVL; setNext(s.interval * DAY);
+      } else {
+        s.step = step; setNext(LEARN_STEPS[step] * MIN);
+      }
+    } else { // easy: gradúa directo
+      s.stage = "review"; s.step = 0; s.reps = 1; s.interval = EASY_IVL; setNext(s.interval * DAY);
+    }
+  } else if (s.stage === "relearning") {
+    if (rating === "again") {
+      s.step = 0;
+      setNext(RELEARN_STEPS[0] * MIN);
+    } else if (rating === "hard") {
+      setNext((RELEARN_STEPS[s.step] || RELEARN_STEPS[0]) * MIN);
+    } else {
+      const step = s.step + 1;
+      if (rating === "easy" || step >= RELEARN_STEPS.length) {
+        s.stage = "review"; s.step = 0; s.reps = 1;
+        s.interval = applyFuzz(clampIvl(Math.max(MIN_IVL, Math.round((s.interval || MIN_IVL) * LAPSE_FACTOR))));
+        setNext(s.interval * DAY);
+      } else {
+        s.step = step; setNext(RELEARN_STEPS[step] * MIN);
+      }
+    }
+  } else { // review
+    const prev = s.interval || MIN_IVL;
+    if (rating === "again") {
+      s.lapses += 1;
+      s.reps = 0;
+      s.ease = Math.max(MIN_EASE, s.ease - 0.20);
+      s.stage = "relearning";
+      s.step = 0;
+      // conserva 'interval' previo para halvearlo al graduar el reaprendizaje
+      setNext(RELEARN_STEPS[0] * MIN);
+    } else {
+      let ivl;
+      if (rating === "hard") {
+        s.ease = Math.max(MIN_EASE, s.ease - 0.15);
+        ivl = Math.max(prev + 1, Math.round(prev * HARD_FACTOR));
+      } else if (rating === "good") {
+        ivl = Math.max(prev + 1, Math.round(prev * s.ease));
+      } else { // easy
+        s.ease = s.ease + 0.15;
+        ivl = Math.max(prev + 1, Math.round(prev * s.ease * EASY_BONUS));
+      }
+      s.reps += 1;
+      s.interval = applyFuzz(clampIvl(ivl));
+      setNext(s.interval * DAY);
+    }
+  }
+
+  if (!preview) {
+    s.history = (s.history || []).concat([{ t: now, r: rating, ivl: s.interval, e: Math.round(s.ease * 100) / 100, st: s.stage }]);
+    if (s.history.length > 200) s.history = s.history.slice(-200);
+  }
+  return s;
+}
+
+/* Devuelve el tiempo hasta la próxima revisión en texto humano (min, d, sem...). */
+function formatDue(ms) {
+  if (ms == null) return "";
+  if (ms < 0) ms = 0;
+  const min = Math.round(ms / MIN);
+  if (min < 60) return `${Math.max(1, min)} min`;
+  const hours = Math.round(ms / (60 * MIN));
+  if (hours < 24) return `${hours} h`;
+  const days = Math.round(ms / DAY);
+  if (days < 21) return `${days} d`;
+  if (days < 60) return `${Math.round(days / 7)} sem`;
+  if (days < 365) return `${Math.round(days / 30)} mes`;
+  const years = days / 365;
+  return `${years % 1 < 0.1 ? years.toFixed(0) : years.toFixed(1)} a`;
+}
+
+/* ============================================================
+   PLANIFICACIÓN DE LA SESIÓN SEGÚN EL TIEMPO DISPONIBLE
+   La duración elegida no solo mueve el reloj: decide CUÁNTOS y
+   CUÁLES cartones entran, estimando el tiempo de cada actividad
+   y priorizando por criterio pedagógico.
+   ============================================================ */
+/* tiempo medio estimado por tipo de actividad (segundos) */
+const TYPE_SEC = { traduccion: 40, correccion: 35, hueco: 25, eleccion: 20, frase_personal: 30 };
+const DEFAULT_SEC = 30;
+/* multiplicador por etapa: lo nuevo y el reaprendizaje se ven varias veces */
+const STAGE_MULT = { new: 2.0, learning: 1.8, relearning: 1.8, review: 1.15 };
+const BASELINE_SEC = 30;    // referencia del "alumno medio" (para personalizar)
+const NEW_PER_SESSION = 20; // tope de cartones nuevos por sesión (evita avalancha)
+const MIN_SESSION = 1;      // siempre al menos un cartón si hay pendientes
+
+function cardStageOf(card) {
+  const s = card && card.schedule;
+  if (s && s.stage) return s.stage;
+  if (s && s.nextReview && (s.interval || 0) >= 1) return "review";
+  if (s && (s.timesReviewed || 0) > 0) return "learning";
+  return "new";
+}
+
+/* factor personal: si el alumno suele tardar más/menos que la referencia */
+function personalFactor(avgSec) {
+  return Math.min(2.5, Math.max(0.5, (avgSec || BASELINE_SEC) / BASELINE_SEC));
+}
+
+/* tiempo estimado (segundos) que costará un cartón, ya personalizado */
+function estCardSec(card, pf = 1) {
+  const base = TYPE_SEC[card.type] || DEFAULT_SEC;
+  const mult = STAGE_MULT[cardStageOf(card)] || 1;
+  return base * mult * pf;
+}
+
+/* orden pedagógico: reaprendizaje > (re)aprendizaje > vencidas > nuevas;
+   dentro de cada grupo, primero lo más vencido. */
+function priorityRank(card) {
+  const st = cardStageOf(card);
+  return st === "relearning" ? 0 : st === "learning" ? 1 : st === "review" ? 2 : 3;
+}
+function orderPool(pool) {
+  return pool.slice().sort((a, b) => {
+    const pa = priorityRank(a), pb = priorityRank(b);
+    if (pa !== pb) return pa - pb;
+    const na = (a.schedule && a.schedule.nextReview) || 0;
+    const nb = (b.schedule && b.schedule.nextReview) || 0;
+    return na - nb;
+  });
+}
+
+/* Monta la fila que cabe en el presupuesto de tiempo (segundos).
+   Devuelve { queue, reserve, estSec }. Con budget null → sin límite
+   (entra todo lo elegible, respetando el tope de cartones nuevos). */
+function planSession(pool, budgetSec, avgSec) {
+  const pf = personalFactor(avgSec);
+  const ordered = orderPool(pool);
+
+  // limita cartones nuevos por sesión
+  let newCount = 0;
+  const eligible = [];
+  for (const c of ordered) {
+    if (cardStageOf(c) === "new") {
+      if (newCount >= NEW_PER_SESSION) continue;
+      newCount++;
+    }
+    eligible.push(c);
+  }
+
+  if (!budgetSec) {
+    return { queue: eligible.map((c) => c.id), reserve: [], estSec: eligible.reduce((s, c) => s + estCardSec(c, pf), 0) };
+  }
+
+  const queue = [], reserve = [];
+  let acc = 0;
+  for (const c of eligible) {
+    const t = estCardSec(c, pf);
+    if (queue.length < MIN_SESSION || acc + t <= budgetSec) { queue.push(c.id); acc += t; }
+    else reserve.push(c.id);
+  }
+  return { queue, reserve, estSec: acc };
 }
 
 const TYPE_LABEL = {
@@ -274,6 +514,7 @@ const SEED_DECK = {
   level: "",
   date: new Date().toISOString().slice(0, 10),
   name: "Frases de las clases",
+  avgSec: null, // tiempo medio real por cartón (se aprende con el uso)
 };
 
 const SEED_CARDS = [
@@ -530,6 +771,8 @@ export function StudentApp({ uid, onLogout, preview = false, previewData = null,
 
   // evita bucles de escritura: guarda el último JSON conocido en Firestore
   const lastRemote = useRef(null);
+  // marca cuándo se mostró el cartón actual (para medir el tiempo real por cartón)
+  const cardShownAt = useRef(Date.now());
 
   /* cargar (suscripción en tiempo real al propio cuaderno) */
   useEffect(() => {
@@ -586,13 +829,33 @@ export function StudentApp({ uid, onLogout, preview = false, previewData = null,
   const activeMazos = selMazos && selMazos.length ? selMazos : mazos;
   const inScope = useMemo(() => cards.filter((c) => activeMazos.includes(mazoOf(c))), [cards, activeMazos.join("|")]);
   const dueCards = useMemo(() => inScope.filter((c) => isDue(c, now)), [inScope]);
-  const currentCard = session && session.queue.length ? cards.find((c) => c.id === session.queue[0]) : null;
+  const cardById = (id) => cards.find((c) => c.id === id);
+  const currentCard = session && session.queue.length ? cardById(session.queue[0]) : null;
+
+  // vista previa: cuántas frases entran en el tiempo elegido (para mostrarlo)
+  const sessionPreview = useMemo(
+    () => planSession(dueCards, duration, deck.avgSec),
+    [dueCards, duration, deck.avgSec]
+  );
 
   /* ---------- sesión ---------- */
   function startSession(useAll) {
     const pool = useAll ? inScope : dueCards;
     if (!pool.length) return;
-    setSession({ queue: pool.map((c) => c.id), initial: pool.length, graduated: [], passes: {}, ratings: {}, startedAt: Date.now(), endedAt: null });
+    const plan = planSession(pool, duration, deck.avgSec);
+    if (!plan.queue.length) return;
+    setSession({
+      queue: plan.queue,
+      reserve: plan.reserve,
+      initial: plan.queue.length,
+      graduated: [],
+      passes: {},
+      ratings: {},
+      answerSecs: [],
+      startedAt: Date.now(),
+      endedAt: null,
+    });
+    cardShownAt.current = Date.now();
     setRevealed(false);
     setUserAnswer("");
     setPicked(null);
@@ -611,24 +874,40 @@ export function StudentApp({ uid, onLogout, preview = false, previewData = null,
   function rate(rating) {
     if (!currentCard) return;
     const id = currentCard.id;
-    setCards((prev) => prev.map((c) => (c.id === id ? { ...c, schedule: nextSchedule(c.schedule, rating) } : c)));
+
+    // tiempo real que tardó en este cartón (acotado para ignorar pausas largas)
+    const spent = Math.min(180, Math.max(2, (Date.now() - cardShownAt.current) / 1000));
+
+    // la fecha de revisión SOLO cambia aquí, al responder de verdad
+    const sched = nextSchedule(currentCard.schedule, rating);
+    setCards((prev) => prev.map((c) => (c.id === id ? { ...c, schedule: sched } : c)));
+
+    // media móvil del tiempo por cartón (se persiste en el cuaderno)
+    setDeck((d) => {
+      const base = typeof d.avgSec === "number" && d.avgSec > 0 ? d.avgSec : BASELINE_SEC;
+      return { ...d, avgSec: Math.round(base * 0.85 + spent * 0.15) };
+    });
 
     setSession((prev) => {
       const passes = { ...prev.passes, [id]: (prev.passes[id] || 0) + 1 };
       const ratings = { ...prev.ratings, [id]: rating };
+      const answerSecs = [...(prev.answerSecs || []), spent];
       let queue = prev.queue.slice(1);
       let graduated = prev.graduated;
-      const graduate = rating === "listo" || passes[id] >= 2;
+      // sale de la sesión cuando su próxima revisión pasa a ser de un día o más
+      // (etapa "review"); si sigue en (re)aprendizaje, vuelve a la cola de hoy.
+      const graduate = (sched.nextReview - Date.now()) >= DAY || passes[id] >= 8;
       if (graduate) {
         if (!graduated.includes(id)) graduated = [...graduated, id];
       } else {
-        const pos = rating === "volver" ? 2 : 4;
+        const pos = rating === "again" ? 2 : rating === "hard" ? 4 : 6;
         const at = Math.min(pos, queue.length);
         queue = [...queue.slice(0, at), id, ...queue.slice(at)];
       }
-      return { ...prev, queue, graduated, passes, ratings };
+      return { ...prev, queue, graduated, passes, ratings, answerSecs };
     });
 
+    cardShownAt.current = Date.now();
     setRevealed(false);
     setUserAnswer("");
     setPicked(null);
@@ -660,6 +939,27 @@ export function StudentApp({ uid, onLogout, preview = false, previewData = null,
     }
   }, [remainingSec, screen, duration, timerOff, timeUpShown, session]);
 
+  // adaptación en vivo: si el alumno va rápido y queda tiempo, suma cartones
+  // de la reserva; si va lento, no suma (y llegará antes al aviso de tiempo).
+  useEffect(() => {
+    if (screen !== "review" || !session || !duration || timerOff) return;
+    if (!session.reserve || !session.reserve.length) return;
+    const pf = personalFactor(deck.avgSec);
+    const uniqQueue = Array.from(new Set(session.queue));
+    const estRemaining = uniqQueue.reduce((s, id) => {
+      const c = cardById(id);
+      return c ? s + estCardSec(c, pf) : s;
+    }, 0);
+    const elapsed = (Date.now() - session.startedAt) / 1000;
+    const nextCard = cardById(session.reserve[0]);
+    const estNext = nextCard ? estCardSec(nextCard, pf) : 0;
+    if (elapsed + estRemaining + estNext <= duration) {
+      setSession((s) => (s && s.reserve && s.reserve.length
+        ? { ...s, queue: [...s.queue, s.reserve[0]], reserve: s.reserve.slice(1), initial: s.initial + 1 }
+        : s));
+    }
+  }, [screen, session, duration, timerOff, tick, deck.avgSec]);
+
   /* ============================================================ */
   if (!loaded) {
     return (
@@ -677,7 +977,7 @@ export function StudentApp({ uid, onLogout, preview = false, previewData = null,
     <div className="cv-root" style={{ background: C.cream, minHeight: 600 }}>
       <style>{CSS}</style>
       {screen === "home" && cards.length === 0 && <Welcome onReceive={() => setScreen("recibir")} onAccount={onAccount} accountLabel={accountLabel} onDemo={() => setCards(buildSeedCards())} />}
-      {screen === "home" && cards.length > 0 && <Home deck={deck} dueCount={dueCards.length} total={inScope.length} mazos={mazos} selMazos={selMazos} setSelMazos={setSelMazos} counts={cards} duration={duration} setDuration={setDuration} onStart={startSession} onAccount={onAccount} accountLabel={accountLabel} onReceive={() => setScreen("recibir")} />}
+      {screen === "home" && cards.length > 0 && <Home deck={deck} dueCount={dueCards.length} total={inScope.length} plannedCount={sessionPreview.queue.length} plannedSec={sessionPreview.estSec} mazos={mazos} selMazos={selMazos} setSelMazos={setSelMazos} counts={cards} duration={duration} setDuration={setDuration} onStart={startSession} onAccount={onAccount} accountLabel={accountLabel} onReceive={() => setScreen("recibir")} />}
       {screen === "recibir" && <Receive onApply={receiveCode} onBack={() => setScreen("home")} />}
       {screen === "review" && currentCard && (
         <Review
@@ -707,7 +1007,7 @@ export function StudentApp({ uid, onLogout, preview = false, previewData = null,
 /* ============================================================
    HOME — área de la alumna
    ============================================================ */
-function Home({ deck, dueCount, total, mazos, selMazos, setSelMazos, counts, duration, setDuration, onStart, onAccount, accountLabel, onReceive }) {
+function Home({ deck, dueCount, total, plannedCount, plannedSec, mazos, selMazos, setSelMazos, counts, duration, setDuration, onStart, onAccount, accountLabel, onReceive }) {
   return (
     <div style={{ position: "relative", overflow: "hidden", minHeight: 600 }}>
       <Concentric color={C.teal} style={{ position: "absolute", bottom: -10, left: -18, opacity: 0.35 }} />
@@ -758,13 +1058,20 @@ function Home({ deck, dueCount, total, mazos, selMazos, setSelMazos, counts, dur
           <RitualChooser duration={duration} setDuration={setDuration} />
 
           {dueCount > 0 ? (
-            <button
-              className="cv-btn"
-              onClick={() => onStart(false)}
-              style={{ width: "100%", padding: "18px", fontSize: 19, background: C.pink, color: C.white, boxShadow: "0 10px 24px rgba(237,76,135,.34)" }}
-            >
-              EMPEZAR MI REPASO →
-            </button>
+            <>
+              <p style={{ textAlign: "center", fontSize: 14, fontWeight: 700, color: "rgba(36,39,54,.6)", margin: "0 0 12px" }}>
+                {duration
+                  ? `En ${Math.round(duration / 60)} min repasarás unas ${plannedCount} de las ${dueCount} frases pendientes.`
+                  : `Repasarás las ${plannedCount} frases pendientes, sin límite de tiempo.`}
+              </p>
+              <button
+                className="cv-btn"
+                onClick={() => onStart(false)}
+                style={{ width: "100%", padding: "18px", fontSize: 19, background: C.pink, color: C.white, boxShadow: "0 10px 24px rgba(237,76,135,.34)" }}
+              >
+                EMPEZAR MI REPASO →
+              </button>
+            </>
           ) : (
             <div style={{ textAlign: "center" }}>
               <p style={{ fontWeight: 800, color: C.teal, fontSize: 17, marginTop: 0 }}>Hoy no hay frases pendientes 🌿</p>
@@ -1185,10 +1492,11 @@ function Review({ card, deck, total, graduated, remainingSec, revealed, userAnsw
             )}
 
             <p style={{ textAlign: "center", fontWeight: 800, color: C.navy, margin: "24px 0 12px", fontSize: 16 }}>¿Cómo lo sentiste?</p>
-            <div className="cv-evalrow" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-              <EvalBtn color={C.teal} label="Listo" sub="Ya lo sé" onClick={() => onRate("listo")} />
-              <EvalBtn color={C.orange} label="Casi" sub="Volver pronto" onClick={() => onRate("casi")} />
-              <EvalBtn color={C.pink} label="Necesito volver" sub="Otra vez" onClick={() => onRate("volver")} />
+            <div className="cv-evalrow" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8 }}>
+              <EvalBtn color={C.pink} label="No lo sé" sub={ratePreview(card, "again")} onClick={() => onRate("again")} />
+              <EvalBtn color={C.orange} label="Difícil" sub={ratePreview(card, "hard")} onClick={() => onRate("hard")} />
+              <EvalBtn color={C.teal} label="Lo sé" sub={ratePreview(card, "good")} onClick={() => onRate("good")} />
+              <EvalBtn color={C.navy} label="Fácil" sub={ratePreview(card, "easy")} onClick={() => onRate("easy")} />
             </div>
           </div>
           );
@@ -1198,11 +1506,21 @@ function Review({ card, deck, total, graduated, remainingSec, revealed, userAnsw
   );
 }
 
+/* Estima cuándo volverá el cartón con cada respuesta (para mostrarlo en el botón). */
+function ratePreview(card, rating) {
+  try {
+    const s = nextSchedule(card.schedule, rating, true);
+    return formatDue(s.nextReview - Date.now());
+  } catch (e) {
+    return "";
+  }
+}
+
 function EvalBtn({ color, label, sub, onClick }) {
   return (
-    <button className="cv-eval" onClick={onClick} style={{ color, padding: "14px 8px", display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
-      <span style={{ fontSize: 16 }}>{label}</span>
-      <span style={{ fontSize: 12, fontWeight: 700, opacity: 0.85 }}>{sub}</span>
+    <button className="cv-eval" onClick={onClick} style={{ color, padding: "12px 6px", display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+      <span style={{ fontSize: 15 }}>{label}</span>
+      <span style={{ fontSize: 11.5, fontWeight: 700, opacity: 0.85 }}>{sub}</span>
     </button>
   );
 }
@@ -1213,9 +1531,10 @@ function EvalBtn({ color, label, sub, onClick }) {
 function Done({ session, onHome }) {
   const ratings = session ? Object.values(session.ratings) : [];
   const revisados = ratings.length;
-  const listo = ratings.filter((r) => r === "listo").length;
-  const casi = ratings.filter((r) => r === "casi").length;
-  const volver = ratings.filter((r) => r === "volver").length;
+  const again = ratings.filter((r) => r === "again").length;
+  const hard = ratings.filter((r) => r === "hard").length;
+  const good = ratings.filter((r) => r === "good").length;
+  const easy = ratings.filter((r) => r === "easy").length;
 
   let tiempo = "";
   if (session && session.startedAt) {
@@ -1248,9 +1567,10 @@ function Done({ session, onHome }) {
         <div className="cv-display" style={{ fontSize: 50, color: C.navy, lineHeight: 1 }}>{revisados}</div>
         <p style={{ margin: "2px 0 18px", fontWeight: 700, color: "rgba(36,39,54,.6)" }}>desafíos vistos</p>
         <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
-          <Tally n={listo} label="Lo sé" color={C.teal} />
-          <Tally n={casi} label="Casi" color={C.orange} />
-          <Tally n={volver} label="Necesito volver" color={C.pink} />
+          <Tally n={again} label="No lo sé" color={C.pink} />
+          <Tally n={hard} label="Difícil" color={C.orange} />
+          <Tally n={good} label="Lo sé" color={C.teal} />
+          <Tally n={easy} label="Fácil" color={C.navy} />
         </div>
         {tiempo && (
           <p style={{ margin: "20px 0 0", fontSize: 14, fontWeight: 700, color: "rgba(36,39,54,.55)" }}>

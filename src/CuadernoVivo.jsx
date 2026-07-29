@@ -14,6 +14,7 @@ import {
   saveStudentDoc,
   removeStudentDoc,
 } from "./store";
+import { buildFeedback, fullAnswer } from "./answerEval";
 
 /* ============================================================
    CUADERNO VIVO · RAYUELA
@@ -76,21 +77,11 @@ const freshSchedule = () => ({
   history: [],           // historial individual: [{ t, r, ivl, e, st }]
 });
 
-/* ---------- código de clase (profesora → alumna) ---------- */
+/* ---------- código de clase (legado: la alumna aún puede recibir un código o archivo así) ---------- */
 const CODE_PREFIX = "RAYUELA1:";   // legado: base64 sin comprimir
 const CODE_PREFIX2 = "RAYUELA2:";  // claves cortas + compresión
 
-/* claves cortas: el mismo contenido ocupa mucho menos */
-const packCard = (c) => {
-  const o = { i: c.id, t: TYPES.indexOf(c.type), f: c.front, a: c.answer };
-  if (c.note) o.n = c.note;
-  if (c.example) o.e = c.example;
-  if (c.tags && c.tags.length) o.g = c.tags;
-  if (c.choices && c.choices.length) o.o = c.choices;
-  if (c.hints && Object.keys(c.hints).length) o.h = c.hints;
-  if (c.mazo) o.z = c.mazo;
-  return o;
-};
+/* claves cortas → formato largo, para decodificar códigos ya enviados anteriormente */
 const unpackCard = (o) => {
   if (o && o.front) return o; // ya viene en formato largo
   const c = { id: o.i, type: TYPES[o.t] || "traduccion", front: o.f, answer: o.a };
@@ -103,34 +94,11 @@ const unpackCard = (o) => {
   return c;
 };
 
-const bytesToB64 = (bytes) => {
-  let bin = "", CH = 0x8000;
-  for (let i = 0; i < bytes.length; i += CH) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
-  return btoa(bin);
-};
 const b64ToBytes = (b64) => {
   const bin = atob(b64), out = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
   return out;
 };
-
-async function encodeCode(obj) {
-  const compact = {
-    s: obj.studentName, l: obj.level, d: obj.deckName, f: obj.date,
-    c: (obj.cards || []).map(packCard),
-  };
-  const json = JSON.stringify(compact);
-  try {
-    if (typeof CompressionStream !== "undefined") {
-      const stream = new Blob([json]).stream().pipeThrough(new CompressionStream("deflate-raw"));
-      const buf = await new Response(stream).arrayBuffer();
-      return CODE_PREFIX2 + bytesToB64(new Uint8Array(buf));
-    }
-  } catch (e) {}
-  // respaldo sin compresión
-  const bytes = new TextEncoder().encode(JSON.stringify(obj));
-  return CODE_PREFIX + bytesToB64(bytes);
-}
 
 function fromCompact(o) {
   if (Array.isArray(o)) return { cards: o.map(unpackCard) };
@@ -156,67 +124,7 @@ async function decodeCode(raw) {
 }
 
 /** Suma las frases nuevas sin tocar el progreso de las que ya existen. */
-/* ---------- pista específica: compara lo que escribió la alumna con lo esperado ---------- */
-const stripEdges = (w) => w.replace(/^[¡¿"«'(\[]+/, "").replace(/[!?.,;:"»')\]]+$/, "");
-const normWord = (w) => stripEdges(w).toLowerCase();
-const noAccent = (w) => normWord(w).normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-
-/** Marca qué palabras difieren entre la respuesta de la alumna y la esperada.
- *  Solo señala DÓNDE hay diferencia — nunca inventa explicaciones gramaticales. */
-function alignMarks(a, b) {
-  const n = a.length, m = b.length;
-  const dp = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
-  for (let i = n - 1; i >= 0; i--)
-    for (let j = m - 1; j >= 0; j--)
-      dp[i][j] = normWord(a[i]) === normWord(b[j]) ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
-  const aMark = new Array(n).fill(true), bMark = new Array(m).fill(true);
-  let i = 0, j = 0;
-  while (i < n && j < m) {
-    if (normWord(a[i]) === normWord(b[j])) { aMark[i] = false; bMark[j] = false; i++; j++; }
-    else if (dp[i + 1][j] >= dp[i][j + 1]) i++;
-    else j++;
-  }
-  return { aMark, bMark };
-}
-
-/** Elige la variante esperada más parecida a lo que escribió la alumna. */
-function bestVariant(mine, expected) {
-  const variants = String(expected || "").split(/\s*\/\s*/).map((s) => s.trim()).filter(Boolean);
-  if (!variants.length) return String(expected || "");
-  let best = variants[0], bestScore = -1;
-  const mw = mine.trim().split(/\s+/);
-  for (const v of variants) {
-    const vw = v.split(/\s+/);
-    const { aMark } = alignMarks(mw, vw);
-    const same = aMark.filter((x) => !x).length;
-    const score = same - Math.abs(mw.length - vw.length) * 0.5;
-    if (score > bestScore) { bestScore = score; best = v; }
-  }
-  return best;
-}
-
-function sameAnswer(mine, expected) {
-  if (!mine || !mine.trim()) return false;
-  const v = bestVariant(mine, expected);
-  const mw = mine.trim().split(/\s+/), vw = v.split(/\s+/);
-  if (mw.length !== vw.length) return false;
-  return mw.every((w, k) => stripEdges(w) === stripEdges(vw[k]));
-}
-
-/** Pista escrita por la profesora para un error concreto (card.hints). */
-function teacherHint(card, mine) {
-  if (!card || !card.hints || !mine || !mine.trim()) return null;
-  const text = " " + mine.toLowerCase().trim().replace(/\s+/g, " ") + " ";
-  const words = new Set(mine.trim().split(/\s+/).map(normWord));
-  const entries = Array.isArray(card.hints) ? card.hints.map((h) => [h.when, h.say]) : Object.entries(card.hints);
-  for (const [key, say] of entries) {
-    if (!key || !say) continue;
-    const k = String(key).toLowerCase().trim();
-    if (words.has(normWord(k)) || text.includes(" " + k + " ")) return String(say);
-  }
-  return null;
-}
-
+/* ---------- evaluación de respuestas: delegada por completo a ./answerEval.js ---------- */
 
 /** En los "hueco", la respuesta esperada se muestra como la frase completa. */
 const MAZO_SIN = "Sin clasificar";
@@ -225,24 +133,6 @@ function listMazos(cards) {
   const seen = [];
   for (const c of cards) { const m = mazoOf(c); if (!seen.includes(m)) seen.push(m); }
   return seen;
-}
-
-function fullAnswer(card) {
-  if (!card) return "";
-  const ans = String(card.answer || "");
-  if (card.type !== "hueco") return ans;
-  const front = String(card.front || "");
-  const blanks = front.match(/_{2,}/g);
-  if (!blanks) return ans;
-  const parts = ans.split(/\s*\/\s*/).map((x) => x.trim()).filter(Boolean);
-  let i = 0;
-  const filled = front.replace(/_{2,}/g, () => {
-    const v = blanks.length > 1 && parts.length === blanks.length ? parts[i] : parts[0] || ans;
-    i++;
-    return v;
-  });
-  // quita la pista de conjugación entre paréntesis al final, si la hay
-  return filled.replace(/\s*\([^)]*\)\s*$/, "").trim();
 }
 
 function mergeCards(existing, incoming) {
@@ -385,22 +275,6 @@ function nextSchedule(sch, rating, preview = false) {
     if (s.history.length > 200) s.history = s.history.slice(-200);
   }
   return s;
-}
-
-/* Devuelve el tiempo hasta la próxima revisión en texto humano (min, d, sem...). */
-function formatDue(ms) {
-  if (ms == null) return "";
-  if (ms < 0) ms = 0;
-  const min = Math.round(ms / MIN);
-  if (min < 60) return `${Math.max(1, min)} min`;
-  const hours = Math.round(ms / (60 * MIN));
-  if (hours < 24) return `${hours} h`;
-  const days = Math.round(ms / DAY);
-  if (days < 21) return `${days} d`;
-  if (days < 60) return `${Math.round(days / 7)} sem`;
-  if (days < 365) return `${Math.round(days / 30)} mes`;
-  const years = days / 365;
-  return `${years % 1 < 0.1 ? years.toFixed(0) : years.toFixed(1)} a`;
 }
 
 /* ============================================================
@@ -1432,23 +1306,19 @@ function Review({ card, deck, total, graduated, remainingSec, revealed, userAnsw
         )}
 
         {revealed && (() => {
-          const expected = fullAnswer(card);
-          const target = bestVariant(myAnswer || "", expected);
-          const perfect = sameAnswer(myAnswer, expected);
-          const mineW = (myAnswer || "").trim() ? myAnswer.trim().split(/\s+/) : [];
-          const expW = target.split(/\s+/);
-          const marks = mineW.length ? alignMarks(mineW, expW) : { aMark: [], bMark: expW.map(() => false) };
-          const hint = teacherHint(card, myAnswer);
-          const explain = hint || card.note;
+          const fb = buildFeedback(card, myAnswer);
+          const { status, mineWords: mineW, targetWords: expW, mineMarks, targetMarks, explain, alternative } = fb;
+          const isCorrect = status === "correct-same" || status === "correct-alt";
+          const boxColor = isCorrect ? C.teal : status === "empty" ? "rgba(36,39,54,.14)" : status === "partial" ? C.orange : C.pink;
 
           return (
           <div className="cv-fade">
-            <div style={{ background: C.white, border: `2px solid ${perfect ? C.teal : "rgba(36,39,54,.14)"}`, borderRadius: 18, padding: "14px 18px", marginBottom: 10 }}>
+            <div style={{ background: C.white, border: `2px solid ${boxColor}`, borderRadius: 18, padding: "14px 18px", marginBottom: 10 }}>
               <p style={{ margin: 0, fontSize: 12, fontWeight: 800, color: "rgba(36,39,54,.5)", textTransform: "uppercase", letterSpacing: 1 }}>Tu respuesta</p>
               {mineW.length ? (
                 <p style={{ margin: "4px 0 0", fontSize: 18, fontWeight: 700, color: C.navy, lineHeight: 1.5 }}>
                   {mineW.map((w, k) => (
-                    <span key={k} style={marks.aMark[k] ? { background: "rgba(237,76,135,.18)", borderBottom: `2px solid ${C.pink}`, borderRadius: 4, padding: "0 2px" } : undefined}>
+                    <span key={k} style={mineMarks[k] ? { background: "rgba(237,76,135,.18)", borderBottom: `2px solid ${C.pink}`, borderRadius: 4, padding: "0 2px" } : undefined}>
                       {w}{k < mineW.length - 1 ? " " : ""}
                     </span>
                   ))}
@@ -1458,22 +1328,37 @@ function Review({ card, deck, total, graduated, remainingSec, revealed, userAnsw
               )}
             </div>
 
-            <div style={{ background: "rgba(108,167,183,.16)", borderRadius: 18, padding: "16px 18px", marginBottom: explain || card.example ? 12 : 0 }}>
+            <div style={{ background: "rgba(108,167,183,.16)", borderRadius: 18, padding: "16px 18px", marginBottom: explain || card.example || (isCorrect && alternative) ? 12 : 0 }}>
               <p style={{ margin: 0, fontSize: 12, fontWeight: 800, color: C.teal, textTransform: "uppercase", letterSpacing: 1 }}>Respuesta esperada</p>
               <p style={{ margin: "4px 0 0", fontSize: 20, fontWeight: 800, color: C.navy, lineHeight: 1.45 }}>
                 {expW.map((w, k) => (
-                  <span key={k} style={mineW.length && marks.bMark[k] ? { background: "rgba(108,167,183,.35)", borderRadius: 4, padding: "0 2px" } : undefined}>
+                  <span key={k} style={mineW.length && targetMarks[k] ? { background: "rgba(108,167,183,.35)", borderRadius: 4, padding: "0 2px" } : undefined}>
                     {w}{k < expW.length - 1 ? " " : ""}
                   </span>
                 ))}
               </p>
-              {mineW.length > 0 && !perfect && (
+              {status === "partial" && (
                 <p style={{ margin: "10px 0 0", fontSize: 13, fontWeight: 700, color: "rgba(36,39,54,.6)" }}>
-                  Compara las palabras marcadas. Si escribiste otra forma que también sea correcta, cuéntaselo a tu profesora.
+                  Casi. Revisá las palabras marcadas: ahí está la diferencia con lo esperado.
                 </p>
               )}
-              {perfect && (
+              {status === "incorrect" && (
+                <p style={{ margin: "10px 0 0", fontSize: 13, fontWeight: 700, color: "rgba(36,39,54,.6)" }}>
+                  Compará tu respuesta con la esperada. Vas a llegar, seguí practicando.
+                </p>
+              )}
+              {status === "correct-same" && (
                 <p style={{ margin: "10px 0 0", fontSize: 13.5, fontWeight: 800, color: C.teal }}>✓ Igual a la forma esperada.</p>
+              )}
+              {status === "correct-alt" && (
+                <p style={{ margin: "10px 0 0", fontSize: 13.5, fontWeight: 800, color: C.teal }}>
+                  ✓ ¡Correcto! Lo dijiste de otra forma, igual de válida.
+                </p>
+              )}
+              {isCorrect && alternative && (
+                <p style={{ margin: "6px 0 0", fontSize: 13, fontWeight: 600, color: "rgba(36,39,54,.6)" }}>
+                  También podrías decir: <span style={{ fontWeight: 800, color: C.navy }}>{alternative}</span>
+                </p>
               )}
             </div>
 
@@ -1493,10 +1378,10 @@ function Review({ card, deck, total, graduated, remainingSec, revealed, userAnsw
 
             <p style={{ textAlign: "center", fontWeight: 800, color: C.navy, margin: "24px 0 12px", fontSize: 16 }}>¿Cómo lo sentiste?</p>
             <div className="cv-evalrow" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8 }}>
-              <EvalBtn color={C.pink} label="No lo sé" sub={ratePreview(card, "again")} onClick={() => onRate("again")} />
-              <EvalBtn color={C.orange} label="Difícil" sub={ratePreview(card, "hard")} onClick={() => onRate("hard")} />
-              <EvalBtn color={C.teal} label="Lo sé" sub={ratePreview(card, "good")} onClick={() => onRate("good")} />
-              <EvalBtn color={C.navy} label="Fácil" sub={ratePreview(card, "easy")} onClick={() => onRate("easy")} />
+              <EvalBtn color={C.pink} label="No lo sé" onClick={() => onRate("again")} />
+              <EvalBtn color={C.orange} label="Difícil" onClick={() => onRate("hard")} />
+              <EvalBtn color={C.teal} label="Lo sé" onClick={() => onRate("good")} />
+              <EvalBtn color={C.navy} label="Fácil" onClick={() => onRate("easy")} />
             </div>
           </div>
           );
@@ -1506,21 +1391,10 @@ function Review({ card, deck, total, graduated, remainingSec, revealed, userAnsw
   );
 }
 
-/* Estima cuándo volverá el cartón con cada respuesta (para mostrarlo en el botón). */
-function ratePreview(card, rating) {
-  try {
-    const s = nextSchedule(card.schedule, rating, true);
-    return formatDue(s.nextReview - Date.now());
-  } catch (e) {
-    return "";
-  }
-}
-
-function EvalBtn({ color, label, sub, onClick }) {
+function EvalBtn({ color, label, onClick }) {
   return (
     <button className="cv-eval" onClick={onClick} style={{ color, padding: "12px 6px", display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
       <span style={{ fontSize: 15 }}>{label}</span>
-      <span style={{ fontSize: 11.5, fontWeight: 700, opacity: 0.85 }}>{sub}</span>
     </button>
   );
 }
@@ -1649,38 +1523,37 @@ function Teacher({ roster, setRoster, onAddStudent, onRemoveStudent, onPreview, 
     ["datos", "Datos"],
     ["importar", "Importar JSON"],
     ["biblioteca", active ? `Biblioteca · ${active.cards.length}` : "Biblioteca"],
-    ["enviar", "Enviar a la alumna"],
     ["prompt", "Prompt"],
   ];
 
   return (
-    <div style={{ background: C.navy, minHeight: 600 }}>
-      <div className="cv-pad" style={{ maxWidth: 760, margin: "0 auto", padding: "24px 32px 50px", color: C.white }}>
-        <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20, gap: 12, flexWrap: "wrap" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <BrandMark size={46} onNavy />
+    <div style={{ background: C.cream, minHeight: 600 }}>
+      <div className="cv-pad" style={{ maxWidth: 760, margin: "0 auto", padding: "28px 32px 50px" }}>
+        <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 22, gap: 12, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <BrandMark size={46} />
             <div>
-              <div className="cv-display" style={{ fontSize: 22, color: C.orange, lineHeight: 1 }}>Modo profesora</div>
-              <div style={{ fontSize: 12, color: "rgba(255,255,255,.55)", fontWeight: 700 }}>Cuaderno Vivo · Rayuela</div>
+              <div className="cv-display" style={{ fontSize: 24, color: C.navy, lineHeight: 1 }}>Modo profesora</div>
+              <div style={{ fontSize: 12.5, color: "rgba(36,39,54,.5)", fontWeight: 700 }}>Cuaderno Vivo · Rayuela</div>
             </div>
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             {active && (
-              <button className="cv-btn" onClick={() => onPreview(active)} style={{ padding: "10px 18px", fontSize: 14, background: C.orange, color: C.navy }}>
-                Ver el cuaderno de {active.name}
+              <button className="cv-btn" onClick={() => onPreview(active)} style={{ padding: "10px 18px", fontSize: 13.5, background: C.orange, color: C.navy }}>
+                Ver el cuaderno
               </button>
             )}
-            <button className="cv-btn" onClick={onLogout} style={{ padding: "10px 18px", fontSize: 14, background: "rgba(255,255,255,.12)", color: C.white }}>
+            <button className="cv-btn" onClick={onLogout} style={{ padding: "10px 18px", fontSize: 13.5, background: "rgba(36,39,54,.08)", color: C.navy }}>
               Cerrar sesión
             </button>
           </div>
         </header>
 
         {active && (
-          <div style={{ background: "rgba(255,255,255,.07)", borderRadius: 16, padding: "12px 16px", marginBottom: 16, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 12.5, fontWeight: 800, color: "rgba(255,255,255,.5)" }}>EDITANDO</span>
-            <span className="cv-display" style={{ fontSize: 22, color: C.orange }}>{active.name}</span>
-            <span style={{ fontSize: 13, fontWeight: 700, color: "rgba(255,255,255,.6)" }}>
+          <div style={{ background: C.creamSoft, borderRadius: 18, padding: "13px 18px", marginBottom: 18, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", boxShadow: "0 8px 24px rgba(36,39,54,.06)", border: "1px solid rgba(36,39,54,.06)" }}>
+            <span style={{ fontSize: 11.5, fontWeight: 800, color: "rgba(36,39,54,.4)", textTransform: "uppercase", letterSpacing: 1 }}>Editando</span>
+            <span className="cv-display" style={{ fontSize: 20, color: C.pink }}>{active.name}</span>
+            <span style={{ fontSize: 13, fontWeight: 700, color: "rgba(36,39,54,.55)" }}>
               {active.cards.length} frase{active.cards.length === 1 ? "" : "s"}{active.level ? ` · ${active.level}` : ""}
             </span>
           </div>
@@ -1696,10 +1569,11 @@ function Teacher({ roster, setRoster, onAddStudent, onRemoveStudent, onPreview, 
                 disabled={disabled}
                 onClick={() => setTab(k)}
                 style={{
-                  padding: "9px 16px", borderRadius: 999, fontWeight: 800, fontSize: 14,
+                  padding: "9px 17px", borderRadius: 999, fontWeight: 800, fontSize: 13.5,
                   opacity: disabled ? 0.35 : 1,
-                  color: tab === k ? C.navy : C.white,
-                  background: tab === k ? C.white : "rgba(255,255,255,.1)",
+                  color: tab === k ? C.white : C.navy,
+                  background: tab === k ? C.navy : C.creamSoft,
+                  border: tab === k ? "none" : "1px solid rgba(36,39,54,.1)",
                 }}
               >
                 {l}
@@ -1714,7 +1588,6 @@ function Teacher({ roster, setRoster, onAddStudent, onRemoveStudent, onPreview, 
         {tab === "datos" && active && <TeacherDatos student={active} onChange={updateActive} />}
         {tab === "importar" && active && <TeacherImport student={active} setCards={setActiveCards} />}
         {tab === "biblioteca" && active && <TeacherLibrary cards={active.cards} setCards={setActiveCards} />}
-        {tab === "enviar" && active && <TeacherSend student={active} onMarkSent={(ids) => setActiveCards((prev) => prev.map((c) => (ids.includes(c.id) ? { ...c, sent: true } : c)))} />}
         {tab === "prompt" && <TeacherPrompt />}
       </div>
     </div>
@@ -1722,7 +1595,7 @@ function Teacher({ roster, setRoster, onAddStudent, onRemoveStudent, onPreview, 
 }
 
 const fieldStyle = { marginBottom: 16 };
-const labelStyle = { display: "block", fontSize: 13, fontWeight: 800, color: "rgba(255,255,255,.7)", marginBottom: 6 };
+const labelStyle = { display: "block", fontSize: 13, fontWeight: 800, color: "rgba(36,39,54,.55)", marginBottom: 6 };
 
 function TeacherRoster({ roster, activeId, onPick, onAdd, onRemove }) {
   const [name, setName] = useState("");
@@ -1755,12 +1628,12 @@ function TeacherRoster({ roster, activeId, onPick, onAdd, onRemove }) {
   return (
     <Panel>
       <H>Mis alumnas</H>
-      <p style={{ fontSize: 14, color: "rgba(255,255,255,.65)", marginTop: 0 }}>
+      <p style={{ fontSize: 14, color: "rgba(36,39,54,.6)", marginTop: 0, fontWeight: 600 }}>
         Cada alumna tiene su propio login y su propio cuaderno. Crea la cuenta aquí y
         entrégale el usuario y la contraseña.
       </p>
 
-      <div style={{ display: "grid", gap: 10, marginBottom: 12 }}>
+      <div style={{ display: "grid", gap: 10, marginBottom: 14 }}>
         <input className="cv-input" value={name} placeholder="Nombre de la alumna" onChange={(e) => setName(e.target.value)} />
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           <input className="cv-input" value={user} placeholder="Usuario (ej. maria)" autoCapitalize="none" autoCorrect="off" spellCheck="false" onChange={(e) => setUser(e.target.value)} style={{ flex: "1 1 160px" }} />
@@ -1770,28 +1643,38 @@ function TeacherRoster({ roster, activeId, onPick, onAdd, onRemove }) {
           className="cv-btn"
           onClick={add}
           disabled={busy}
-          style={{ padding: "12px 22px", fontSize: 15, background: busy ? "rgba(255,255,255,.2)" : C.pink, color: C.white, justifySelf: "start" }}
+          style={{ padding: "12px 22px", fontSize: 14.5, background: busy ? "rgba(36,39,54,.15)" : C.pink, color: C.white, justifySelf: "start" }}
         >
           {busy ? "Creando..." : "Crear cuenta de alumna"}
         </button>
       </div>
 
       {msg && (
-        <div style={{ marginBottom: 16, padding: "12px 14px", borderRadius: 14, fontWeight: 700, fontSize: 14, background: msg.ok ? "rgba(108,167,183,.25)" : "rgba(237,76,135,.22)", color: C.white, border: `1px solid ${msg.ok ? C.teal : C.pink}` }}>
+        <div style={{ marginBottom: 16, padding: "12px 14px", borderRadius: 14, fontWeight: 700, fontSize: 13.5, background: msg.ok ? "rgba(108,167,183,.16)" : "rgba(237,76,135,.14)", color: C.navy, border: `1.5px solid ${msg.ok ? C.teal : C.pink}` }}>
           {msg.ok ? "✓ " : "⚠ "}{msg.text}
         </div>
       )}
 
       {!roster.length ? (
-        <p style={{ color: "rgba(255,255,255,.5)", fontWeight: 600 }}>Todavía no hay alumnas. Añade la primera arriba.</p>
+        <p style={{ color: "rgba(36,39,54,.45)", fontWeight: 600 }}>Todavía no hay alumnas. Añade la primera arriba.</p>
       ) : (
         <div style={{ display: "grid", gap: 10 }}>
           {roster.map((s) => (
-            <div key={s.id} style={{ background: s.id === activeId ? "rgba(242,173,94,.16)" : "rgba(255,255,255,.06)", borderRadius: 16, padding: "14px 16px", border: `1px solid ${s.id === activeId ? C.orange : "rgba(255,255,255,.08)"}`, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-              <div>
-                <div className="cv-display" style={{ fontSize: 21, color: C.white }}>{s.name}</div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: "rgba(255,255,255,.55)" }}>
-                  {s.cards.length} frase{s.cards.length === 1 ? "" : "s"}{s.level ? ` · ${s.level}` : ""}{s.date ? ` · ${s.date}` : ""}
+            <div key={s.id} style={{ background: s.id === activeId ? "rgba(242,173,94,.14)" : C.creamSoft, borderRadius: 18, padding: "13px 16px", border: `1.5px solid ${s.id === activeId ? C.orange : "rgba(36,39,54,.08)"}`, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <div style={{
+                  width: 38, height: 38, borderRadius: "50%", flex: "0 0 auto",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontFamily: "'Barriecito',cursive", fontSize: 17, color: C.white,
+                  background: [C.teal, C.orange, C.pink][s.name ? s.name.length % 3 : 0],
+                }}>
+                  {(s.name || "?").trim().charAt(0).toUpperCase()}
+                </div>
+                <div>
+                  <div className="cv-display" style={{ fontSize: 19, color: C.navy, lineHeight: 1 }}>{s.name}</div>
+                  <div style={{ fontSize: 12.5, fontWeight: 700, color: "rgba(36,39,54,.5)", marginTop: 3 }}>
+                    {s.cards.length} frase{s.cards.length === 1 ? "" : "s"}{s.level ? ` · ${s.level}` : ""}{s.date ? ` · ${s.date}` : ""}
+                  </div>
                 </div>
               </div>
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -1832,73 +1715,145 @@ function TeacherDatos({ student, onChange }) {
   );
 }
 
-function TeacherImport({ student, setCards }) {
-  const [text, setText] = useState("");
-  const [msg, setMsg] = useState(null);
-  const [mazo, setMazo] = useState(`Clase ${student.date || ""}`.trim());
+/* Fecha de hoy en formato es-AR/es-ES corto (dd/mm/aaaa), para nombrar el bloque importado. */
+function todayEs() {
+  return new Date().toLocaleDateString("es", { day: "2-digit", month: "2-digit", year: "numeric" });
+}
 
-  function validate() {
-    try {
-      const data = JSON.parse(text);
-      if (!Array.isArray(data)) return { error: "El JSON debe ser una lista [ ... ]." };
-      const norm = [];
-      for (const item of data) {
-        if (!item || typeof item !== "object") return { error: "Hay un elemento que no es una tarjeta válida." };
-        if (!TYPES.includes(item.type)) return { error: `Tipo no válido: "${item.type}". Usa: ${TYPES.join(", ")}.` };
-        if (!item.front || !item.answer) return { error: 'Cada tarjeta necesita "front" y "answer".' };
-        norm.push({
-          id: item.id || uid(),
-          type: item.type,
-          front: String(item.front),
-          answer: String(item.answer),
-          note: item.note ? String(item.note) : "",
-          example: item.example ? String(item.example) : "",
-          tags: Array.isArray(item.tags) ? item.tags : [],
-          ...(item.type === "eleccion" && Array.isArray(item.choices) ? { choices: item.choices } : {}),
-          ...(item.hints && typeof item.hints === "object" ? { hints: item.hints } : {}),
-          mazo: (item.mazo || mazo || "").trim(),
-          schedule: freshSchedule(),
-        });
-      }
-      return { cards: norm };
-    } catch (e) {
-      return { error: "El JSON no es válido. Revisa comas, comillas y corchetes." };
-    }
+/** Lee y valida el contenido de un archivo .json de importación.
+ *  Acepta tanto una lista simple de tarjetas [...] como un objeto
+ *  { deckName, date, cards: [...] } (formato de un cuaderno exportado antes). */
+function parseImportJson(raw) {
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch (e) {
+    return { error: "El archivo no contiene un JSON válido" };
   }
 
-  function apply(mode) {
-    const r = validate();
-    if (r.error) { setMsg({ ok: false, text: r.error }); return; }
-    if (mode === "replace") {
-      setCards(r.cards);
-      setMsg({ ok: true, text: `Cuaderno de ${student.name} reemplazado: ${r.cards.length} frases.` });
-    } else {
-      setCards((prev) => mergeCards(prev, r.cards).cards);
-      setMsg({ ok: true, text: `Se añadieron ${r.cards.length} frases a «${mazo || MAZO_SIN}».` });
+  let list, title = "", dateField = "";
+  if (Array.isArray(data)) {
+    list = data;
+  } else if (data && typeof data === "object" && Array.isArray(data.cards)) {
+    list = data.cards;
+    title = String(data.deckName || data.title || "").trim();
+    dateField = String(data.date || "").trim();
+  } else {
+    return { error: "La estructura del archivo no es la esperada" };
+  }
+
+  if (!list.length) return { error: "La estructura del archivo no es la esperada" };
+
+  const norm = [];
+  for (const item of list) {
+    if (!item || typeof item !== "object") return { error: "La estructura del archivo no es la esperada" };
+    if (!TYPES.includes(item.type)) return { error: "La estructura del archivo no es la esperada" };
+    if (!item.front || !item.answer) return { error: "La estructura del archivo no es la esperada" };
+    norm.push({
+      id: item.id || uid(),
+      type: item.type,
+      front: String(item.front),
+      answer: String(item.answer),
+      note: item.note ? String(item.note) : "",
+      example: item.example ? String(item.example) : "",
+      tags: Array.isArray(item.tags) ? item.tags : [],
+      ...(item.type === "eleccion" && Array.isArray(item.choices) ? { choices: item.choices } : {}),
+      ...(item.hints && typeof item.hints === "object" ? { hints: item.hints } : {}),
+      schedule: freshSchedule(),
+    });
+  }
+  return { cards: norm, title, dateField };
+}
+
+function TeacherImport({ student, setCards }) {
+  const [fileName, setFileName] = useState("");
+  const [status, setStatus] = useState(null); // { ok, text, detail }
+  const [dragOver, setDragOver] = useState(false);
+  const inputRef = useRef(null);
+
+  function handleFile(file) {
+    if (!file || !/\.json$/i.test(file.name)) {
+      setFileName(file ? file.name : "");
+      setStatus({ ok: false, text: "Selecciona un archivo .json para continuar" });
+      return;
     }
-    setText("");
+    setFileName(file.name);
+    const reader = new FileReader();
+    reader.onload = () => {
+      const r = parseImportJson(String(reader.result || ""));
+      if (r.error) { setStatus({ ok: false, text: r.error }); return; }
+      const dateStr = r.dateField || todayEs();
+      const blockName = r.title || `Clase ${dateStr}`;
+      const withBlock = r.cards.map((c) => ({ ...c, mazo: blockName }));
+      setCards((prev) => mergeCards(prev, withBlock).cards);
+      setStatus({
+        ok: true,
+        text: "Archivo cargado correctamente",
+        detail: `Se añadieron ${r.cards.length} frase${r.cards.length === 1 ? "" : "s"} a «${blockName}» en la Biblioteca de ${student.name}.`,
+      });
+    };
+    reader.onerror = () => setStatus({ ok: false, text: "El archivo no contiene un JSON válido" });
+    reader.readAsText(file);
+  }
+
+  function onInputChange(e) {
+    handleFile(e.target.files && e.target.files[0]);
+    e.target.value = "";
+  }
+  function onDrop(e) {
+    e.preventDefault();
+    setDragOver(false);
+    handleFile(e.dataTransfer.files && e.dataTransfer.files[0]);
   }
 
   return (
     <Panel>
       <H>Importar JSON</H>
-      <p style={{ fontSize: 14, color: "rgba(255,255,255,.65)", marginTop: 0 }}>
-        Pega aquí las frases que generó Claude a partir del chat de la clase de {student.name}.
+      <p style={{ fontSize: 14, color: "rgba(36,39,54,.6)", marginTop: 0, marginBottom: 16, fontWeight: 600 }}>
+        Sube el archivo .json que generó Claude con las frases de la clase de {student.name}.
+        Se validan y se agregan directo a su Biblioteca, en un bloque nuevo con nombre y fecha.
       </p>
-      <div style={{ marginBottom: 12 }}>
-        <label style={labelStyle}>Nombre de esta clase (así la alumna puede elegirla después)</label>
-        <input className="cv-input" value={mazo} onChange={(e) => setMazo(e.target.value)} placeholder="Clase 23/07" />
+
+      <div
+        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={onDrop}
+        onClick={() => inputRef.current && inputRef.current.click()}
+        style={{
+          cursor: "pointer", borderRadius: 20, padding: "34px 20px", textAlign: "center",
+          border: `2.5px dashed ${dragOver ? C.teal : "rgba(36,39,54,.2)"}`,
+          background: dragOver ? "rgba(108,167,183,.1)" : "rgba(36,39,54,.02)",
+          transition: "border-color .15s ease, background .15s ease",
+        }}
+      >
+        <input ref={inputRef} type="file" accept=".json,application/json" onChange={onInputChange} style={{ display: "none" }} />
+        <div style={{ fontSize: 32, marginBottom: 10, lineHeight: 1 }}>📄</div>
+        <button
+          type="button"
+          className="cv-btn"
+          onClick={(e) => { e.stopPropagation(); inputRef.current && inputRef.current.click(); }}
+          style={{ padding: "12px 22px", fontSize: 14.5, background: C.navy, color: C.white }}
+        >
+          Seleccionar archivo .json
+        </button>
+        <p style={{ margin: "12px 0 0", fontSize: 13, fontWeight: 700, color: "rgba(36,39,54,.45)" }}>
+          o arrastra y suelta el archivo aquí
+        </p>
+        {fileName && (
+          <p style={{ margin: "12px 0 0", fontSize: 13.5, fontWeight: 800, color: C.navy }}>📎 {fileName}</p>
+        )}
       </div>
-      <textarea className="cv-input" rows={9} value={text} onChange={(e) => setText(e.target.value)} placeholder='[ { "type": "traduccion", "front": "...", "answer": "..." } ]' style={{ fontFamily: "monospace", fontSize: 13 }} />
-      {msg && (
-        <div style={{ marginTop: 12, padding: "12px 14px", borderRadius: 14, fontWeight: 700, fontSize: 14, background: msg.ok ? "rgba(108,167,183,.25)" : "rgba(237,76,135,.22)", color: C.white, border: `1px solid ${msg.ok ? C.teal : C.pink}` }}>
-          {msg.ok ? "✓ " : "⚠ "}{msg.text}
+
+      {status && (
+        <div style={{ marginTop: 14, padding: "13px 16px", borderRadius: 14, background: status.ok ? "rgba(108,167,183,.16)" : "rgba(237,76,135,.14)", border: `1.5px solid ${status.ok ? C.teal : C.pink}` }}>
+          <p style={{ margin: 0, fontWeight: 800, fontSize: 14, color: C.navy }}>
+            {status.ok ? "✓ " : "⚠ "}{status.text}
+          </p>
+          {status.detail && (
+            <p style={{ margin: "4px 0 0", fontSize: 13, fontWeight: 600, color: "rgba(36,39,54,.65)" }}>{status.detail}</p>
+          )}
         </div>
       )}
-      <div style={{ display: "flex", gap: 10, marginTop: 16, flexWrap: "wrap" }}>
-        <button className="cv-btn" onClick={() => apply("add")} style={{ padding: "12px 20px", fontSize: 15, background: C.teal, color: C.white }}>Añadir al cuaderno</button>
-        <button className="cv-btn" onClick={() => apply("replace")} style={{ padding: "12px 20px", fontSize: 15, background: "transparent", color: C.white, border: "2px solid rgba(255,255,255,.3)" }}>Reemplazar todo</button>
-      </div>
     </Panel>
   );
 }
@@ -1918,7 +1873,7 @@ function TeacherLibrary({ cards, setCards }) {
     });
   }
 
-  if (!cards.length) return <Panel><H>Biblioteca de tarjetas</H><p style={{ color: "rgba(255,255,255,.6)" }}>Aún no hay tarjetas. Importa un JSON para empezar.</p></Panel>;
+  if (!cards.length) return <Panel><H>Biblioteca de tarjetas</H><p style={{ color: "rgba(36,39,54,.5)", fontWeight: 600 }}>Aún no hay tarjetas. Importa un JSON para empezar.</p></Panel>;
 
   return (
     <Panel>
@@ -1926,15 +1881,15 @@ function TeacherLibrary({ cards, setCards }) {
       {listMazos(cards).map((mz) => (
         <div key={mz} style={{ marginBottom: 22 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "0 0 10px", flexWrap: "wrap" }}>
-            <span className="cv-display" style={{ fontSize: 20, color: C.orange }}>{mz}</span>
-            <span style={{ fontSize: 12.5, fontWeight: 700, color: "rgba(255,255,255,.5)" }}>
+            <span className="cv-display" style={{ fontSize: 19, color: C.pink }}>{mz}</span>
+            <span style={{ fontSize: 12.5, fontWeight: 700, color: "rgba(36,39,54,.5)" }}>
               {cards.filter((c) => mazoOf(c) === mz).length} frases
             </span>
             <ConfirmBtn label="Eliminar clase" confirmLabel="¿Seguro? Toca otra vez" color={C.pink} onConfirm={() => setCards((prev) => prev.filter((c) => mazoOf(c) !== mz))} />
           </div>
-      <div style={{ display: "grid", gap: 12 }}>
+      <div style={{ display: "grid", gap: 10 }}>
         {cards.filter((c) => mazoOf(c) === mz).map((card) => (
-          <div key={card.id} style={{ background: "rgba(255,255,255,.06)", borderRadius: 16, padding: 16, border: "1px solid rgba(255,255,255,.08)" }}>
+          <div key={card.id} style={{ background: C.creamSoft, borderRadius: 16, padding: 15, border: "1px solid rgba(36,39,54,.08)" }}>
             {editing === card.id ? (
               <CardEditor card={card} onChange={(patch) => update(card.id, patch)} onClose={() => setEditing(null)} />
             ) : (
@@ -1947,8 +1902,8 @@ function TeacherLibrary({ cards, setCards }) {
                     <MiniBtn onClick={() => del(card.id)} color={C.pink}>Eliminar</MiniBtn>
                   </div>
                 </div>
-                <p style={{ margin: "10px 0 4px", fontWeight: 800, color: C.white, fontSize: 15 }}>{card.front}</p>
-                <p style={{ margin: 0, fontSize: 14, color: C.orange, fontWeight: 700 }}>{card.answer}</p>
+                <p style={{ margin: "10px 0 4px", fontWeight: 800, color: C.navy, fontSize: 15 }}>{card.front}</p>
+                <p style={{ margin: 0, fontSize: 14, color: C.teal, fontWeight: 700 }}>{card.answer}</p>
               </>
             )}
           </div>
@@ -1978,7 +1933,7 @@ function CardEditor({ card, onChange, onClose }) {
       )}
       <EditField label="Clase / mazo" value={card.mazo || ""} onChange={(v) => onChange({ mazo: v })} />
       <EditField label="Tags (separa con ,)" value={(card.tags || []).join(", ")} onChange={(v) => onChange({ tags: v.split(",").map((s) => s.trim()).filter(Boolean) })} />
-      <button className="cv-btn" onClick={onClose} style={{ padding: "10px 18px", fontSize: 14, background: C.teal, color: C.white, justifySelf: "start" }}>Listo</button>
+      <button className="cv-btn" onClick={onClose} style={{ padding: "10px 18px", fontSize: 13.5, background: C.teal, color: C.white, justifySelf: "start" }}>Listo</button>
     </div>
   );
 }
@@ -2028,95 +1983,6 @@ function ConfirmBtn({ label, confirmLabel, onConfirm, color }) {
   );
 }
 
-function TeacherSend({ student, onMarkSent }) {
-  const [copied, setCopied] = useState(false);
-  const [downloaded, setDownloaded] = useState(false);
-  const [mode, setMode] = useState("todo");
-  const [code, setCode] = useState("");
-  const ref = useRef(null);
-
-  const clean = (c) => ({ id: c.id, type: c.type, front: c.front, answer: c.answer, note: c.note, example: c.example, tags: c.tags, ...(c.choices ? { choices: c.choices } : {}), ...(c.hints ? { hints: c.hints } : {}), ...(c.mazo ? { mazo: c.mazo } : {}) });
-  const nuevas = student.cards.filter((c) => !c.sent);
-  const chosen = mode === "nuevas" ? nuevas : student.cards;
-
-  const payload = {
-    studentName: student.name,
-    level: student.level,
-    deckName: student.deckName,
-    date: student.date,
-    cards: chosen.map(clean),
-  };
-
-  useEffect(() => {
-    let alive = true;
-    encodeCode(payload).then((c) => { if (alive) setCode(c); });
-    return () => { alive = false; };
-  }, [student, mode, chosen.length]);
-
-  const slug = (student.name || "alumna").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9]+/g, "-");
-
-  function download() {
-    const blob = new Blob([JSON.stringify(payload, null, 1)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `Cuaderno-${slug}-${student.date || ""}.json`;
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-    setDownloaded(true); setTimeout(() => setDownloaded(false), 2200);
-    if (onMarkSent) onMarkSent(chosen.map((c) => c.id));
-  }
-
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(code);
-    } catch (e) {
-      if (ref.current) { ref.current.select(); document.execCommand("copy"); }
-    }
-    setCopied(true); setTimeout(() => setCopied(false), 1800);
-    if (onMarkSent) onMarkSent(chosen.map((c) => c.id));
-  }
-
-  return (
-    <Panel>
-      <H>Enviar a {student.name}</H>
-
-      <div style={{ display: "flex", gap: 8, margin: "0 0 18px", flexWrap: "wrap" }}>
-        <MiniBtn onClick={() => setMode("todo")} color={mode === "todo" ? C.orange : C.teal}>
-          Todo el cuaderno ({student.cards.length})
-        </MiniBtn>
-        <MiniBtn onClick={() => setMode("nuevas")} color={mode === "nuevas" ? C.orange : C.teal}>
-          Solo lo nuevo ({nuevas.length})
-        </MiniBtn>
-      </div>
-
-      <div style={{ background: "rgba(237,76,135,.14)", border: `1px solid ${C.pink}`, borderRadius: 18, padding: 18, marginBottom: 18 }}>
-        <p style={{ margin: "0 0 4px", fontWeight: 800, fontSize: 16, color: C.white }}>1 · Enviar el archivo (recomendado)</p>
-        <p style={{ margin: "0 0 14px", fontSize: 13.5, color: "rgba(255,255,255,.7)", lineHeight: 1.5 }}>
-          Descarga el archivo y mándaselo por WhatsApp como documento. Ella toca <strong>Elegir el archivo</strong> — sin copiar ni pegar nada.
-        </p>
-        <button className="cv-btn" onClick={download} style={{ padding: "13px 24px", fontSize: 15, background: downloaded ? C.teal : C.white, color: downloaded ? C.white : C.navy }}>
-          {downloaded ? "✓ Archivo descargado" : `📄 Descargar archivo (${chosen.length} frases)`}
-        </button>
-      </div>
-
-      <p style={{ margin: "0 0 8px", fontWeight: 800, fontSize: 15, color: "rgba(255,255,255,.8)" }}>2 · O un código de texto</p>
-      <p style={{ margin: "0 0 12px", fontSize: 13, color: "rgba(255,255,255,.55)", lineHeight: 1.5 }}>
-        Práctico solo para pocas frases. Con un cuaderno entero el código queda muy largo — ahí es mejor el archivo.
-      </p>
-      <textarea ref={ref} className="cv-input" rows={4} readOnly value={code} style={{ fontFamily: "monospace", fontSize: 11.5 }} />
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 12, flexWrap: "wrap" }}>
-        <button className="cv-btn" onClick={copy} style={{ padding: "11px 20px", fontSize: 14, background: copied ? C.teal : "transparent", color: C.white, border: copied ? "none" : "2px solid rgba(255,255,255,.3)" }}>
-          {copied ? "✓ Copiado" : "Copiar código"}
-        </button>
-        <span style={{ fontSize: 12.5, fontWeight: 700, color: code.length > 2000 ? C.orange : "rgba(255,255,255,.5)" }}>
-          {code.length.toLocaleString("es")} caracteres{code.length > 2000 ? " · largo, usa el archivo" : ""}
-        </span>
-      </div>
-    </Panel>
-  );
-}
-
 function TeacherPrompt() {
   const [copied, setCopied] = useState(false);
   const ref = useRef(null);
@@ -2131,7 +1997,7 @@ function TeacherPrompt() {
   return (
     <Panel>
       <H>Prompt para transformar el chat de la clase</H>
-      <p style={{ fontSize: 14, color: "rgba(255,255,255,.65)", marginTop: 0 }}>
+      <p style={{ fontSize: 14, color: "rgba(36,39,54,.6)", marginTop: 0, fontWeight: 600 }}>
         Copia este prompt y pégalo en Claude junto con el chat de la aula. Te devolverá el JSON listo para importar.
       </p>
       <textarea ref={ref} className="cv-input" rows={12} readOnly value={TEACHER_PROMPT} style={{ fontFamily: "monospace", fontSize: 12.5, lineHeight: 1.6 }} />
@@ -2144,10 +2010,10 @@ function TeacherPrompt() {
 
 /* ---------- piezas del modo profesora ---------- */
 function Panel({ children }) {
-  return <div className="cv-fade" style={{ background: "rgba(255,255,255,.04)", borderRadius: 22, padding: 24, border: "1px solid rgba(255,255,255,.08)" }}>{children}</div>;
+  return <div className="cv-fade" style={{ background: C.creamSoft, borderRadius: 24, padding: 26, boxShadow: "0 14px 36px rgba(36,39,54,.08)", border: "1px solid rgba(36,39,54,.06)" }}>{children}</div>;
 }
 function H({ children }) {
-  return <h2 className="cv-display" style={{ fontSize: 26, color: C.white, margin: "0 0 16px" }}>{children}</h2>;
+  return <h2 className="cv-display" style={{ fontSize: 24, color: C.navy, margin: "0 0 14px" }}>{children}</h2>;
 }
 
 /* ============================================================

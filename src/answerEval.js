@@ -91,12 +91,31 @@ export function fullAnswer(card) {
   return filled.replace(/\s*\([^)]*\)\s*$/, "").trim();
 }
 
+/* Separa "answer" por "/" respetando paréntesis/corchetes, para no romper
+   formas como "(él/ella/usted) se equivocó" en varias variantes. */
+function splitVariants(s) {
+  const parts = [];
+  let cur = "", depth = 0;
+  for (const ch of s) {
+    if (ch === "(" || ch === "[" || ch === "{" || ch === "«") depth++;
+    else if (ch === ")" || ch === "]" || ch === "}" || ch === "»") depth = Math.max(0, depth - 1);
+    if (ch === "/" && depth === 0) {
+      if (cur.trim()) parts.push(cur.trim());
+      cur = "";
+    } else {
+      cur += ch;
+    }
+  }
+  if (cur.trim()) parts.push(cur.trim());
+  return parts;
+}
+
 /* Todas las formas aceptadas: la(s) guardada(s) en "answer" (separadas por "/")
    más las alternativas explícitas en "altAnswers" (formulaciones igual de
    correctas, idealmente anticipadas al crear la tarjeta). */
 export function getVariants(card) {
   const base = fullAnswer(card);
-  const primary = String(base || "").split(/\s*\/\s*/).map((s) => s.trim()).filter(Boolean);
+  const primary = splitVariants(String(base || ""));
   const alt = Array.isArray(card.altAnswers) ? card.altAnswers.map((s) => String(s || "").trim()).filter(Boolean) : [];
   const all = [...primary, ...alt];
   return all.length ? all : [""];
@@ -150,24 +169,61 @@ function clearMovable(a, b, aMark, bMark) {
   });
 }
 
-/* Quita del marcado un pronombre sujeto sobrante/faltante al inicio de la frase
-   (su presencia u omisión es una elección válida, no un error). */
+/* Reconoce un pronombre sujeto, incluso en formas compuestas
+   como "él/ella/usted" o "nosotros/nosotras". */
+function isSubjectPronoun(w) {
+  const parts = noAccent(w).split("/").map((p) => p.trim()).filter(Boolean);
+  if (!parts.length) return false;
+  return parts.every((p) => SUBJECT_PRONOUNS.has(p));
+}
+
+/* Quita del marcado los pronombres sujeto sobrantes/faltantes
+   (su presencia u omisión es una elección válida, no un error).
+   Funciona también con listas de formas verbales: "(yo) me equivoqué,
+   (tú) te equivocaste..." vs. "me equivoqué, te equivocaste...". */
 function clearOptionalSubject(a, b, aMark, bMark) {
-  if (a.length > b.length && aMark[0] && SUBJECT_PRONOUNS.has(noAccent(a[0]))) {
-    // ¿el resto de "a" (sin el pronombre) sigue alineando bien con "b"?
-    const rest = a.slice(1);
-    const { aMark: restMark } = rawAlign(rest, b);
-    const restErrors = restMark.filter(Boolean).length;
-    const currentErrors = aMark.slice(1).filter(Boolean).length;
-    if (restErrors <= currentErrors) {
-      aMark[0] = false;
-      for (let k = 1; k < a.length; k++) aMark[k] = restMark[k - 1];
+  const aSubs = a.map((w, i) => ({ i })).filter(({ i }) => aMark[i] && isSubjectPronoun(a[i]));
+  const bSubs = b.map((w, j) => ({ j })).filter(({ j }) => bMark[j] && isSubjectPronoun(b[j]));
+  if (!aSubs.length && !bSubs.length) return;
+
+  let best = null;
+  for (let maskA = 0; maskA < (1 << aSubs.length); maskA++) {
+    for (let maskB = 0; maskB < (1 << bSubs.length); maskB++) {
+      const keepA = new Set();
+      const keepB = new Set();
+      for (let k = 0; k < aSubs.length; k++) if (maskA & (1 << k)) keepA.add(aSubs[k].i);
+      for (let k = 0; k < bSubs.length; k++) if (maskB & (1 << k)) keepB.add(bSubs[k].j);
+      const aActive = a.filter((_, i) => !aMark[i] || keepA.has(i));
+      const bActive = b.filter((_, j) => !bMark[j] || keepB.has(j));
+      const { aMark: ra, bMark: rb } = rawAlign(aActive, bActive);
+      const err = ra.filter(Boolean).length + rb.filter(Boolean).length;
+      const score = err - keepA.size * 0.01 - keepB.size * 0.01;
+      if (!best || score < best.score) best = { err, keepA, keepB, score };
     }
-  } else if (b.length > a.length && bMark[0] && SUBJECT_PRONOUNS.has(noAccent(b[0]))) {
-    const restB = b.slice(1);
-    const { bMark: restMark } = rawAlign(a, restB);
-    bMark[0] = false;
-    for (let k = 1; k < b.length; k++) bMark[k] = restMark[k - 1];
+  }
+
+  const aActive = a.filter((_, i) => !aMark[i] || best.keepA.has(i));
+  const bActive = b.filter((_, j) => !bMark[j] || best.keepB.has(j));
+  const { aMark: ra, bMark: rb } = rawAlign(aActive, bActive);
+
+  const aActiveSet = new Set();
+  const bActiveSet = new Set();
+  for (let i = 0; i < a.length; i++) {
+    if (!aMark[i] || best.keepA.has(i)) aActiveSet.add(i);
+  }
+  for (let j = 0; j < b.length; j++) {
+    if (!bMark[j] || best.keepB.has(j)) bActiveSet.add(j);
+  }
+
+  aMark.fill(true);
+  bMark.fill(true);
+  let p = 0;
+  for (let i = 0; i < a.length; i++) {
+    aMark[i] = aActiveSet.has(i) ? ra[p++] : false;
+  }
+  p = 0;
+  for (let j = 0; j < b.length; j++) {
+    bMark[j] = bActiveSet.has(j) ? rb[p++] : false;
   }
 }
 
@@ -207,11 +263,35 @@ function isLiteralMatch(mineW, vw) {
 
 /**
  * Evalúa la respuesta de la alumna contra todas las formas aceptadas.
- * status: "empty" | "correct-same" | "correct-alt" | "partial" | "incorrect"
+ * status: "empty" | "correct-same" | "correct-alt" | "partial" | "incorrect" | "personal"
+ *
+ * Para el tipo "frase_personal" la respuesta es, por definición, personal:
+ * la alumna adapta la estructura a su propia realidad. No se compara palabra
+ * por palabra con el modelo; se comprueba que haya escrito algo y se ofrece
+ * el modelo como referencia sin marcar errores.
  */
 export function evaluateAnswer(card, mineRaw) {
   const mine = String(mineRaw || "");
   const variants = getVariants(card);
+
+  if (card && card.type === "frase_personal") {
+    if (!mine.trim()) {
+      const vw = (variants[0] || "").split(/\s+/).filter(Boolean);
+      return {
+        status: "empty", mineWords: [], targetWords: vw,
+        mineMarks: [], targetMarks: vw.map(() => false),
+        target: variants[0] || "", variants, errorWords: [],
+      };
+    }
+    const mineW = mine.trim().split(/\s+/);
+    const target = variants[0] || "";
+    const targetW = target.split(/\s+/).filter(Boolean);
+    return {
+      status: "personal", mineWords: mineW, targetWords: targetW,
+      mineMarks: mineW.map(() => false), targetMarks: targetW.map(() => false),
+      target, variants, errorWords: [],
+    };
+  }
 
   if (!mine.trim()) {
     const vw = (variants[0] || "").split(/\s+/).filter(Boolean);

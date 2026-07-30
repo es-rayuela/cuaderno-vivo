@@ -26,6 +26,13 @@ describe("respuesta correcta pero distinta del modelo (sin error real)", () => {
     expect(ev.errorWords).toEqual([]);
   });
 
+  it("pronombres sujeto entre paréntesis en una lista de formas verbales no son obligatorios", () => {
+    const c = card("(yo) me equivoqué, (tú) te equivocaste, (él/ella/usted) se equivocó");
+    const ev = evaluateAnswer(c, "me equivoqué, te equivocaste, se equivocó");
+    expect(ev.status).toBe("correct-alt");
+    expect(ev.errorWords).toEqual([]);
+  });
+
   it("partícula móvil ('solo') no es error por cambiar de posición", () => {
     const ev = evaluateAnswer(card("Solo trabaja los lunes"), "Trabaja solo los lunes");
     expect(ev.status).toBe("correct-alt");
@@ -117,6 +124,28 @@ describe("feedback final: nunca explica un error que no existe", () => {
     const c = card("Necesito estudiar", { altAnswers: ["Tengo que estudiar"] });
     const fb = buildFeedback(c, "Necesito estudiar");
     expect(fb.alternative).toBe("Tengo que estudiar");
+  });
+});
+
+describe("frase_personal: la respuesta es propia de la alumna", () => {
+  const modelo = "Trabajo en una empresa de productos veterinarios y me encargo de la atención al cliente. (modelo — usa tu experiencia real)";
+  const c = { type: "frase_personal", front: "Adapta para ti: «Trabajo en _ y me encargo de _.»", answer: modelo };
+
+  it("acepta cualquier respuesta escrita como personal", () => {
+    const ev = evaluateAnswer(c, "Trabajo en una empresa de enseñanza de idiomas y me encargo de absolutamente todo.");
+    expect(ev.status).toBe("personal");
+    expect(ev.errorWords).toEqual([]);
+  });
+
+  it("marca empty cuando no responde nada", () => {
+    const ev = evaluateAnswer(c, "");
+    expect(ev.status).toBe("empty");
+  });
+
+  it("el feedback muestra la nota, no un error", () => {
+    const fb = buildFeedback({ ...c, note: "Completa com a sua realidade." }, "Trabajo en una escuela de idiomas.");
+    expect(fb.status).toBe("personal");
+    expect(fb.errorWords).toEqual([]);
   });
 });
 

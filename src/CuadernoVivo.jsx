@@ -14,7 +14,7 @@ import {
   saveStudentDoc,
   removeStudentDoc,
 } from "./store";
-import { buildFeedback, fullAnswer } from "./answerEval";
+import { fullAnswer } from "./answerEval";
 
 /* ============================================================
    CUADERNO VIVO · RAYUELA
@@ -243,7 +243,6 @@ const DEFAULT_SEC = 30;
 /* multiplicador por etapa: lo nuevo y el reaprendizaje se ven varias veces */
 const STAGE_MULT = { new: 2.0, learning: 1.8, relearning: 1.8, review: 1.15 };
 const BASELINE_SEC = 30;    // referencia del "alumno medio" (para personalizar)
-const NEW_PER_SESSION = 20; // tope de cartones nuevos por sesión (evita avalancha)
 const MIN_SESSION = 1;      // siempre al menos un cartón si hay pendientes
 
 function cardStageOf(card) {
@@ -284,29 +283,20 @@ function orderPool(pool) {
 
 /* Monta la fila que cabe en el presupuesto de tiempo (segundos).
    Devuelve { queue, reserve, estSec }. Con budget null → sin límite
-   (entra todo lo elegible, respetando el tope de cartones nuevos). */
+   (entra todo lo pendiente). Con tiempo definido, entran los cartones
+   que caben en ese presupuesto, en orden pedagógico; el resto queda
+   en reserva y se va sumando en vivo si al final queda tiempo. */
 function planSession(pool, budgetSec, avgSec) {
   const pf = personalFactor(avgSec);
   const ordered = orderPool(pool);
 
-  // limita cartones nuevos por sesión
-  let newCount = 0;
-  const eligible = [];
-  for (const c of ordered) {
-    if (cardStageOf(c) === "new") {
-      if (newCount >= NEW_PER_SESSION) continue;
-      newCount++;
-    }
-    eligible.push(c);
-  }
-
   if (!budgetSec) {
-    return { queue: eligible.map((c) => c.id), reserve: [], estSec: eligible.reduce((s, c) => s + estCardSec(c, pf), 0) };
+    return { queue: ordered.map((c) => c.id), reserve: [], estSec: ordered.reduce((s, c) => s + estCardSec(c, pf), 0) };
   }
 
   const queue = [], reserve = [];
   let acc = 0;
-  for (const c of eligible) {
+  for (const c of ordered) {
     const t = estCardSec(c, pf);
     if (queue.length < MIN_SESSION || acc + t <= budgetSec) { queue.push(c.id); acc += t; }
     else reserve.push(c.id);
@@ -608,6 +598,9 @@ export function StudentApp({ uid, onLogout, preview = false, previewData = null,
   const [userAnswer, setUserAnswer] = useState("");
   const [picked, setPicked] = useState(null);
 
+  // modo de repaso: "flashcard" (estilo Anki, sin escribir) o "escritura" (escribe y compara)
+  const [mode, setMode] = useState("escritura");
+
   // mazos (clases) seleccionados para repasar
   const [selMazos, setSelMazos] = useState(null); // null = todos
 
@@ -806,7 +799,7 @@ export function StudentApp({ uid, onLogout, preview = false, previewData = null,
     <div className="cv-root" style={{ background: C.cream, minHeight: 600 }}>
       <style>{CSS}</style>
       {screen === "home" && cards.length === 0 && <Welcome onAccount={onAccount} accountLabel={accountLabel} onDemo={() => setCards(buildSeedCards())} />}
-      {screen === "home" && cards.length > 0 && <Home deck={deck} dueCount={dueCards.length} total={inScope.length} plannedCount={sessionPreview.queue.length} plannedSec={sessionPreview.estSec} mazos={mazos} selMazos={selMazos} setSelMazos={setSelMazos} counts={cards} duration={duration} setDuration={setDuration} onStart={startSession} onAccount={onAccount} accountLabel={accountLabel} />}
+      {screen === "home" && cards.length > 0 && <Home deck={deck} dueCount={dueCards.length} total={inScope.length} plannedCount={sessionPreview.queue.length} plannedSec={sessionPreview.estSec} mazos={mazos} selMazos={selMazos} setSelMazos={setSelMazos} counts={cards} duration={duration} setDuration={setDuration} mode={mode} setMode={setMode} onStart={startSession} onAccount={onAccount} accountLabel={accountLabel} />}
       {screen === "review" && currentCard && (
         <Review
           card={currentCard}
@@ -814,6 +807,8 @@ export function StudentApp({ uid, onLogout, preview = false, previewData = null,
           total={session.initial}
           graduated={session.graduated.length}
           remainingSec={remainingSec}
+          mode={mode}
+          onToggleMode={() => setMode((m) => (m === "flashcard" ? "escritura" : "flashcard"))}
           revealed={revealed}
           userAnswer={userAnswer}
           picked={picked}
@@ -835,7 +830,8 @@ export function StudentApp({ uid, onLogout, preview = false, previewData = null,
 /* ============================================================
    HOME — área de la alumna
    ============================================================ */
-function Home({ deck, dueCount, total, plannedCount, plannedSec, mazos, selMazos, setSelMazos, counts, duration, setDuration, onStart, onAccount, accountLabel }) {
+function Home({ deck, dueCount, total, plannedCount, plannedSec, mazos, selMazos, setSelMazos, counts, duration, setDuration, mode, setMode, onStart, onAccount, accountLabel }) {
+  const [showHelp, setShowHelp] = useState(false);
   return (
     <div style={{ position: "relative", overflow: "hidden", minHeight: 600 }}>
       <Concentric color={C.teal} style={{ position: "absolute", bottom: -10, left: -18, opacity: 0.35 }} />
@@ -865,6 +861,13 @@ function Home({ deck, dueCount, total, plannedCount, plannedSec, mazos, selMazos
           <p style={{ fontSize: 15, color: "rgba(36,39,54,.72)", fontWeight: 600, maxWidth: 480, margin: "14px auto 0", lineHeight: 1.55 }}>
             Tu cuaderno reúne las frases y correcciones de tus clases y te las devuelve poco a poco para repasar. Así fijas lo que aprendiste y ganas soltura al hablar.
           </p>
+          <button
+            className="cv-link"
+            onClick={() => setShowHelp(true)}
+            style={{ marginTop: 12, fontSize: 14, fontWeight: 800, color: C.teal, textDecoration: "underline" }}
+          >
+            Cómo funciona y cómo utilizar tu Cuaderno
+          </button>
         </div>
 
         <div className="cv-fade" style={{ background: C.creamSoft, borderRadius: 28, padding: 26, marginTop: 32, boxShadow: "0 14px 40px rgba(36,39,54,.08)", border: "1px solid rgba(36,39,54,.06)" }}>
@@ -879,6 +882,8 @@ function Home({ deck, dueCount, total, plannedCount, plannedSec, mazos, selMazos
           </div>
 
           <MazoChooser mazos={mazos} selMazos={selMazos} setSelMazos={setSelMazos} cards={counts} />
+
+          <ModeChooser mode={mode} setMode={setMode} />
 
           <RitualChooser duration={duration} setDuration={setDuration} />
 
@@ -906,6 +911,110 @@ function Home({ deck, dueCount, total, plannedCount, plannedSec, mazos, selMazos
             </div>
           )}
         </div>
+      </div>
+      {showHelp && <HowItWorksModal onClose={() => setShowHelp(false)} />}
+    </div>
+  );
+}
+
+function HowItWorksModal({ onClose }) {
+  return (
+    <div
+      style={{ position: "fixed", inset: 0, zIndex: 60, display: "flex", alignItems: "center", justifyContent: "center", padding: 20, background: "rgba(36,39,54,.5)", backdropFilter: "blur(3px)" }}
+      onClick={onClose}
+    >
+      <div
+        className="cv-fade"
+        onClick={(e) => e.stopPropagation()}
+        style={{ background: C.creamSoft, borderRadius: 28, padding: "30px 28px", maxWidth: 560, width: "100%", maxHeight: "85vh", overflowY: "auto", boxShadow: "0 24px 60px rgba(36,39,54,.3)", textAlign: "left" }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 6 }}>
+          <h2 className="cv-display" style={{ fontSize: 28, color: C.navy, margin: 0, lineHeight: 1.1 }}>
+            Cómo funciona tu Cuaderno
+          </h2>
+          <button className="cv-link" onClick={onClose} style={{ fontSize: 22, color: "rgba(36,39,54,.5)", lineHeight: 1 }}>✕</button>
+        </div>
+
+        <p style={{ fontSize: 15, color: "rgba(36,39,54,.78)", fontWeight: 600, lineHeight: 1.6, margin: "14px 0 0" }}>
+          Tu Cuaderno Vivo está hecho para que lo que surge durante la clase no desaparezca después.
+        </p>
+        <p style={{ fontSize: 15, color: "rgba(36,39,54,.78)", fontWeight: 600, lineHeight: 1.6, margin: "12px 0 0" }}>
+          Aquí vas a reencontrarte con palabras, expresiones y estructuras que ya aparecieron en tu recorrido. No se trata de memorizarlo todo de una vez, sino de volver a cada contenido en el momento adecuado.
+        </p>
+
+        <h3 className="cv-display" style={{ fontSize: 20, color: C.pink, margin: "22px 0 8px" }}>¿Cómo funciona?</h3>
+        <p style={{ fontSize: 15, color: "rgba(36,39,54,.78)", fontWeight: 600, lineHeight: 1.6, margin: "0 0 8px" }}>
+          Cuando aparezca una tarjeta, intenta recordar la respuesta antes de verla.
+        </p>
+        <p style={{ fontSize: 15, color: "rgba(36,39,54,.78)", fontWeight: 600, lineHeight: 1.6, margin: "0 0 12px" }}>
+          Después, elige el botón que mejor represente lo que pasó:
+        </p>
+
+        <div style={{ display: "grid", gap: 10, marginBottom: 12 }}>
+          <div style={{ background: C.white, borderRadius: 16, padding: "12px 16px", border: "1px solid rgba(36,39,54,.08)" }}>
+            <p style={{ margin: 0, fontWeight: 800, color: C.teal, fontSize: 15 }}>Fácil</p>
+            <p style={{ margin: "2px 0 0", fontSize: 14, color: "rgba(36,39,54,.7)", fontWeight: 600 }}>Lo recordaste enseguida y sientes que ya está bastante firme.</p>
+          </div>
+          <div style={{ background: C.white, borderRadius: 16, padding: "12px 16px", border: "1px solid rgba(36,39,54,.08)" }}>
+            <p style={{ margin: 0, fontWeight: 800, color: C.teal, fontSize: 15 }}>Bien</p>
+            <p style={{ margin: "2px 0 0", fontSize: 14, color: "rgba(36,39,54,.7)", fontWeight: 600 }}>Lo recordaste sin grandes dificultades.</p>
+          </div>
+          <div style={{ background: C.white, borderRadius: 16, padding: "12px 16px", border: "1px solid rgba(36,39,54,.08)" }}>
+            <p style={{ margin: 0, fontWeight: 800, color: C.orange, fontSize: 15 }}>Difícil</p>
+            <p style={{ margin: "2px 0 0", fontSize: 14, color: "rgba(36,39,54,.7)", fontWeight: 600 }}>Lo recordaste, pero necesitaste más tiempo, pistas o esfuerzo.</p>
+          </div>
+          <div style={{ background: C.white, borderRadius: 16, padding: "12px 16px", border: "1px solid rgba(36,39,54,.08)" }}>
+            <p style={{ margin: 0, fontWeight: 800, color: C.pink, fontSize: 15 }}>No lo recordé</p>
+            <p style={{ margin: "2px 0 0", fontSize: 14, color: "rgba(36,39,54,.7)", fontWeight: 600 }}>La respuesta no apareció esta vez.</p>
+          </div>
+        </div>
+
+        <p style={{ fontSize: 15, color: "rgba(36,39,54,.78)", fontWeight: 600, lineHeight: 1.6, margin: "0 0 0" }}>
+          No hace falta pensarlo demasiado. Elige la opción que mejor describa cómo fue recordar ese contenido en ese momento.
+        </p>
+
+        <h3 className="cv-display" style={{ fontSize: 20, color: C.pink, margin: "22px 0 8px" }}>¿Qué pasa después?</h3>
+        <p style={{ fontSize: 15, color: "rgba(36,39,54,.78)", fontWeight: 600, lineHeight: 1.6, margin: "0 0 8px" }}>
+          Tu respuesta ayuda al Cuaderno Vivo a decidir cuándo mostrarte esa tarjeta otra vez.
+        </p>
+        <p style={{ fontSize: 15, color: "rgba(36,39,54,.78)", fontWeight: 600, lineHeight: 1.6, margin: "0 0 8px" }}>
+          Los contenidos que recuerdas con facilidad tardan más en volver. Los que todavía cuestan reaparecen antes y con mayor frecuencia.
+        </p>
+        <p style={{ fontSize: 15, color: "rgba(36,39,54,.78)", fontWeight: 600, lineHeight: 1.6, margin: "0 0 8px" }}>
+          Eso es la <em>repetición espaciada</em>: una técnica que distribuye las revisiones a lo largo del tiempo, en lugar de repetir muchas veces el mismo contenido de una sola vez.
+        </p>
+        <p style={{ fontSize: 15, color: "rgba(36,39,54,.78)", fontWeight: 600, lineHeight: 1.6, margin: "0 0 0" }}>
+          La idea es volver a encontrar cada palabra, expresión o estructura justo cuando tu memoria necesita reforzarla.
+        </p>
+
+        <h3 className="cv-display" style={{ fontSize: 20, color: C.pink, margin: "22px 0 8px" }}>No necesitas recordarlo todo</h3>
+        <p style={{ fontSize: 15, color: "rgba(36,39,54,.78)", fontWeight: 600, lineHeight: 1.6, margin: "0 0 8px" }}>
+          Olvidar también forma parte del proceso.
+        </p>
+        <p style={{ fontSize: 15, color: "rgba(36,39,54,.78)", fontWeight: 600, lineHeight: 1.6, margin: "0 0 8px" }}>
+          Cuando eliges <em>No lo recordé</em>, no estás retrocediendo ni empezando desde cero. Solo le estás mostrando al sistema que ese contenido necesita volver un poco antes.
+        </p>
+        <p style={{ fontSize: 15, color: "rgba(36,39,54,.78)", fontWeight: 600, lineHeight: 1.6, margin: "0 0 0" }}>
+          Tu Cuaderno no está aquí para ponerte a prueba. Está aquí para ayudarte a mantener vivo tu español.
+        </p>
+
+        <h3 className="cv-display" style={{ fontSize: 20, color: C.pink, margin: "22px 0 8px" }}>Un poco, muchas veces</h3>
+        <p style={{ fontSize: 15, color: "rgba(36,39,54,.78)", fontWeight: 600, lineHeight: 1.6, margin: "0 0 8px" }}>
+          No necesitas hacer sesiones largas.
+        </p>
+        <p style={{ fontSize: 15, color: "rgba(36,39,54,.78)", fontWeight: 600, lineHeight: 1.6, margin: "0 0 8px" }}>
+          Cinco minutos pueden ser suficientes para reencontrarte con lo que estudiaste, fortalecer conexiones y mantener el español presente.
+        </p>
+        <p style={{ fontSize: 15, color: "rgba(36,39,54,.78)", fontWeight: 600, lineHeight: 1.6, margin: "0 0 8px" }}>
+          Lo importante no es revisarlo todo hoy.
+        </p>
+        <p style={{ fontSize: 15, color: "rgba(36,39,54,.78)", fontWeight: 600, lineHeight: 1.6, margin: "0 0 20px" }}>
+          Es volver mañana, pasado mañana y cada vez que tu español necesite un pequeño impulso.
+        </p>
+
+        <button className="cv-btn" onClick={onClose} style={{ width: "100%", padding: 15, fontSize: 16, background: C.teal, color: C.white }}>
+          Entendido
+        </button>
       </div>
     </div>
   );
@@ -958,6 +1067,39 @@ function MazoChooser({ mazos, selMazos, setSelMazos, cards }) {
                 background: on ? "rgba(108,167,183,.2)" : C.white, color: on ? C.teal : "rgba(36,39,54,.7)" }}
             >
               {on ? "✓ " : ""}{m} · {count(m)}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+const MODE_OPTIONS = [
+  { id: "flashcard", t: "Flashcard", label: "Pienso la respuesta y giro la tarjeta." },
+  { id: "escritura", t: "Escritura", label: "Escribo mi respuesta y después la comparo." },
+];
+
+function ModeChooser({ mode, setMode }) {
+  return (
+    <div style={{ marginBottom: 22 }}>
+      <p className="cv-display" style={{ margin: "0 0 2px", fontSize: 22, color: C.navy }}>¿Cómo quieres repasar?</p>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 12 }}>
+        {MODE_OPTIONS.map((o) => {
+          const active = mode === o.id;
+          return (
+            <button
+              key={o.id}
+              className="cv-tap"
+              onClick={() => setMode(o.id)}
+              style={{
+                textAlign: "left", padding: "14px 16px", borderRadius: 16,
+                border: `2px solid ${active ? C.pink : "rgba(36,39,54,.14)"}`,
+                background: active ? "rgba(237,76,135,.1)" : C.white,
+              }}
+            >
+              <div style={{ fontWeight: 800, fontSize: 16, color: active ? C.pink : C.navy, textTransform: "uppercase", letterSpacing: 0.5 }}>{o.t}</div>
+              <div style={{ fontSize: 12.5, fontWeight: 600, color: "rgba(36,39,54,.6)", marginTop: 2 }}>{o.label}</div>
             </button>
           );
         })}
@@ -1101,15 +1243,18 @@ function Lock({ onUnlock, onBack }) {
 /* ============================================================
    REVIEW — un desafío a la vez
    ============================================================ */
-function Review({ card, deck, total, graduated, remainingSec, revealed, userAnswer, picked, onAnswer, onPick, onReveal, onRate, onExit }) {
+function Review({ card, deck, total, graduated, remainingSec, mode, onToggleMode, revealed, userAnswer, picked, onAnswer, onPick, onReveal, onRate, onExit }) {
   const accent = TYPE_COLOR[card.type] || C.teal;
   const isChoice = card.type === "eleccion" && Array.isArray(card.choices);
+  const isFlashcard = mode === "flashcard";
   const myAnswer = isChoice ? picked : userAnswer;
   const minsLeft = remainingSec != null ? Math.ceil(remainingSec / 60) : null;
+  const expected = fullAnswer(card);
+  const isPersonal = card.type === "frase_personal";
 
   return (
     <div className="cv-pad" style={{ maxWidth: 620, margin: "0 auto", padding: "22px 32px 44px" }}>
-      <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18 }}>
+      <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, gap: 10, flexWrap: "wrap" }}>
         <button className="cv-link" onClick={onExit} style={{ color: "rgba(36,39,54,.55)" }}>← Salir</button>
         {minsLeft != null && (
           <span style={{ fontSize: 12.5, fontWeight: 700, color: "rgba(36,39,54,.4)" }}>
@@ -1120,6 +1265,12 @@ function Review({ card, deck, total, graduated, remainingSec, revealed, userAnsw
           {Math.min(graduated + 1, total)} de {total}
         </span>
       </header>
+
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 18 }}>
+        <button className="cv-link" onClick={onToggleMode} style={{ fontSize: 12.5, fontWeight: 700, color: "rgba(36,39,54,.42)" }}>
+          {isFlashcard ? "Cambiar a modo escritura" : "Cambiar a modo flashcard"}
+        </button>
+      </div>
 
       <div style={{ marginBottom: 22 }}>
         <Hopscotch total={total} graduated={graduated} />
@@ -1135,11 +1286,11 @@ function Review({ card, deck, total, graduated, remainingSec, revealed, userAnsw
           {card.front}
         </p>
 
-        {!revealed && !isChoice && (
+        {!revealed && !isFlashcard && !isChoice && (
           <textarea className="cv-input" placeholder="Escribe tu respuesta (opcional)" value={userAnswer} onChange={(e) => onAnswer(e.target.value)} rows={2} />
         )}
 
-        {!revealed && isChoice && (
+        {!revealed && !isFlashcard && isChoice && (
           <div style={{ display: "grid", gap: 10 }}>
             {card.choices.map((ch, i) => (
               <button
@@ -1164,75 +1315,23 @@ function Review({ card, deck, total, graduated, remainingSec, revealed, userAnsw
           </button>
         )}
 
-        {revealed && (() => {
-          const fb = buildFeedback(card, myAnswer);
-          const { status, mineWords: mineW, targetWords: expW, mineMarks, targetMarks, explain, alternative } = fb;
-          const isCorrect = status === "correct-same" || status === "correct-alt" || status === "personal";
-          const isPersonal = card.type === "frase_personal";
-          const boxColor = isCorrect ? C.teal : status === "empty" ? "rgba(36,39,54,.14)" : status === "partial" ? C.orange : C.pink;
-
-          return (
+        {revealed && (
           <div className="cv-fade">
-            <div style={{ background: C.white, border: `2px solid ${boxColor}`, borderRadius: 18, padding: "14px 18px", marginBottom: 10 }}>
-              <p style={{ margin: 0, fontSize: 12, fontWeight: 800, color: "rgba(36,39,54,.5)", textTransform: "uppercase", letterSpacing: 1 }}>Tu respuesta</p>
-              {mineW.length ? (
-                <p style={{ margin: "4px 0 0", fontSize: 18, fontWeight: 700, color: C.navy, lineHeight: 1.5 }}>
-                  {mineW.map((w, k) => (
-                    <span key={k} style={mineMarks[k] ? { background: "rgba(237,76,135,.18)", borderBottom: `2px solid ${C.pink}`, borderRadius: 4, padding: "0 2px" } : undefined}>
-                      {w}{k < mineW.length - 1 ? " " : ""}
-                    </span>
-                  ))}
-                </p>
-              ) : (
-                <p style={{ margin: "4px 0 0", fontSize: 18, fontWeight: 700, fontStyle: "italic", color: "rgba(36,39,54,.42)" }}>— la dijiste en voz alta</p>
-              )}
-            </div>
-
-            <div style={{ background: "rgba(108,167,183,.16)", borderRadius: 18, padding: "16px 18px", marginBottom: explain || card.example || (isCorrect && alternative) ? 12 : 0 }}>
-              <p style={{ margin: 0, fontSize: 12, fontWeight: 800, color: C.teal, textTransform: "uppercase", letterSpacing: 1 }}>{isPersonal ? "Un modelo" : "Respuesta esperada"}</p>
-              <p style={{ margin: "4px 0 0", fontSize: 20, fontWeight: 800, color: C.navy, lineHeight: 1.45 }}>
-                {expW.map((w, k) => (
-                  <span key={k} style={mineW.length && targetMarks[k] ? { background: "rgba(108,167,183,.35)", borderRadius: 4, padding: "0 2px" } : undefined}>
-                    {w}{k < expW.length - 1 ? " " : ""}
-                  </span>
-                ))}
-              </p>
-              {status === "partial" && (
-                <p style={{ margin: "10px 0 0", fontSize: 13, fontWeight: 700, color: "rgba(36,39,54,.6)" }}>
-                  Casi. Revisá las palabras marcadas: ahí está la diferencia con lo esperado.
-                </p>
-              )}
-              {status === "incorrect" && (
-                <p style={{ margin: "10px 0 0", fontSize: 13, fontWeight: 700, color: "rgba(36,39,54,.6)" }}>
-                  Compará tu respuesta con la esperada. Vas a llegar, seguí practicando.
-                </p>
-              )}
-              {status === "correct-same" && (
-                <p style={{ margin: "10px 0 0", fontSize: 13.5, fontWeight: 800, color: C.teal }}>✓ Igual a la forma esperada.</p>
-              )}
-              {status === "correct-alt" && (
-                <p style={{ margin: "10px 0 0", fontSize: 13.5, fontWeight: 800, color: C.teal }}>
-                  ✓ ¡Correcto! Lo dijiste de otra forma, igual de válida.
-                </p>
-              )}
-              {status === "personal" && (
-                <p style={{ margin: "10px 0 0", fontSize: 13.5, fontWeight: 800, color: C.teal }}>
-                  ✓ ¡Bien! La hiciste tuya. El modelo es solo una referencia.
-                </p>
-              )}
-              {isCorrect && alternative && !isPersonal && (
-                <p style={{ margin: "6px 0 0", fontSize: 13, fontWeight: 600, color: "rgba(36,39,54,.6)" }}>
-                  También podrías decir: <span style={{ fontWeight: 800, color: C.navy }}>{alternative}</span>
-                </p>
-              )}
-            </div>
-
-            {explain && (
-              <div style={{ display: "flex", gap: 10, alignItems: "flex-start", marginBottom: card.example ? 10 : 0, padding: "0 4px" }}>
-                <span className="cv-chip" style={{ background: C.navy, color: C.white, flex: "0 0 auto", fontSize: 15, lineHeight: 1.1 }}>⚡</span>
-                <p style={{ margin: 0, fontSize: 15, color: "rgba(36,39,54,.82)" }}>{explain}</p>
+            {!isFlashcard && (
+              <div style={{ background: C.white, border: "2px solid rgba(36,39,54,.14)", borderRadius: 18, padding: "14px 18px", marginBottom: 10 }}>
+                <p style={{ margin: 0, fontSize: 12, fontWeight: 800, color: "rgba(36,39,54,.5)", textTransform: "uppercase", letterSpacing: 1 }}>Tu respuesta</p>
+                {String(myAnswer || "").trim() ? (
+                  <p style={{ margin: "4px 0 0", fontSize: 18, fontWeight: 700, color: C.navy, lineHeight: 1.5 }}>{myAnswer}</p>
+                ) : (
+                  <p style={{ margin: "4px 0 0", fontSize: 18, fontWeight: 700, fontStyle: "italic", color: "rgba(36,39,54,.42)" }}>— la dijiste en voz alta</p>
+                )}
               </div>
             )}
+
+            <div style={{ background: "rgba(108,167,183,.16)", borderRadius: 18, padding: "16px 18px", marginBottom: card.example ? 12 : 0 }}>
+              <p style={{ margin: 0, fontSize: 12, fontWeight: 800, color: C.teal, textTransform: "uppercase", letterSpacing: 1 }}>{isPersonal ? "Un modelo" : "Respuesta esperada"}</p>
+              <p style={{ margin: "4px 0 0", fontSize: 20, fontWeight: 800, color: C.navy, lineHeight: 1.45 }}>{expected}</p>
+            </div>
 
             {card.example && (
               <div style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "0 4px" }}>
@@ -1249,8 +1348,7 @@ function Review({ card, deck, total, graduated, remainingSec, revealed, userAnsw
               <EvalBtn color={C.navy} label="Fácil" onClick={() => onRate("easy")} />
             </div>
           </div>
-          );
-        })()}
+        )}
       </div>
     </div>
   );

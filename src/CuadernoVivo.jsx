@@ -478,12 +478,20 @@ textarea.cv-input{ resize:vertical; min-height:64px; }
 .cv-float{ animation:cvFloat 4s ease-in-out infinite; }
 .cv-current{ animation:cvPulse 1.6s ease-in-out infinite; }
 .cv-chip{ font-weight:700; font-size:12px; border-radius:999px; padding:4px 11px; }
+.cv-flip{ perspective:1400px; }
+.cv-flip-card{
+  position:relative; display:grid; transform-style:preserve-3d;
+  transition:transform .55s cubic-bezier(.4,.15,.2,1);
+}
+.cv-flip.cv-flipped .cv-flip-card{ transform:rotateY(180deg); }
+.cv-flip-face{ grid-area:1/1; backface-visibility:hidden; -webkit-backface-visibility:hidden; }
+.cv-flip-back{ transform:rotateY(180deg); }
 @media (max-width:600px){
   .cv-pad{ padding-left:18px !important; padding-right:18px !important; }
   .cv-evalrow{ grid-template-columns:1fr !important; }
 }
 @media (prefers-reduced-motion: reduce){
-  .cv-btn, .cv-eval, .cv-stone, .cv-fade, .cv-float, .cv-current{ animation:none !important; transition:none !important; }
+  .cv-btn, .cv-eval, .cv-stone, .cv-fade, .cv-float, .cv-current, .cv-flip-card{ animation:none !important; transition:none !important; }
 }
 `;
 
@@ -942,6 +950,24 @@ function HowItWorksModal({ onClose }) {
           Aquí vas a reencontrarte con palabras, expresiones y estructuras que ya aparecieron en tu recorrido. No se trata de memorizarlo todo de una vez, sino de volver a cada contenido en el momento adecuado.
         </p>
 
+        <h3 className="cv-display" style={{ fontSize: 20, color: C.pink, margin: "22px 0 8px" }}>Flashcard o Escritura</h3>
+        <p style={{ fontSize: 15, color: "rgba(36,39,54,.78)", fontWeight: 600, lineHeight: 1.6, margin: "0 0 12px" }}>
+          Antes de repasar, eliges cómo quieres hacerlo. Puedes cambiar de modo cuando quieras, sin perder tu progreso.
+        </p>
+        <div style={{ display: "grid", gap: 10, marginBottom: 12 }}>
+          <div style={{ background: C.white, borderRadius: 16, padding: "12px 16px", border: "1px solid rgba(36,39,54,.08)" }}>
+            <p style={{ margin: 0, fontWeight: 800, color: C.navy, fontSize: 15, textTransform: "uppercase", letterSpacing: 0.5 }}>Flashcard</p>
+            <p style={{ margin: "2px 0 0", fontSize: 14, color: "rgba(36,39,54,.7)", fontWeight: 600 }}>Pienso la respuesta y giro la tarjeta.</p>
+          </div>
+          <div style={{ background: C.white, borderRadius: 16, padding: "12px 16px", border: "1px solid rgba(36,39,54,.08)" }}>
+            <p style={{ margin: 0, fontWeight: 800, color: C.navy, fontSize: 15, textTransform: "uppercase", letterSpacing: 0.5 }}>Escritura</p>
+            <p style={{ margin: "2px 0 0", fontSize: 14, color: "rgba(36,39,54,.7)", fontWeight: 600 }}>Escribo mi respuesta y después la comparo.</p>
+          </div>
+        </div>
+        <p style={{ fontSize: 15, color: "rgba(36,39,54,.78)", fontWeight: 600, lineHeight: 1.6, margin: "0 0 0" }}>
+          En Flashcard, la tarjeta se da vuelta al pulsar «Ver respuesta», como una tarjeta física. En Escritura, después de confirmar tu respuesta ves lo que escribiste junto a la respuesta esperada. En ningún caso el Cuaderno te dice si estuviste bien o mal: eres tú quien compara y decide cómo lo sentiste.
+        </p>
+
         <h3 className="cv-display" style={{ fontSize: 20, color: C.pink, margin: "22px 0 8px" }}>¿Cómo funciona?</h3>
         <p style={{ fontSize: 15, color: "rgba(36,39,54,.78)", fontWeight: 600, lineHeight: 1.6, margin: "0 0 8px" }}>
           Cuando aparezca una tarjeta, intenta recordar la respuesta antes de verla.
@@ -956,7 +982,7 @@ function HowItWorksModal({ onClose }) {
             <p style={{ margin: "2px 0 0", fontSize: 14, color: "rgba(36,39,54,.7)", fontWeight: 600 }}>Lo recordaste enseguida y sientes que ya está bastante firme.</p>
           </div>
           <div style={{ background: C.white, borderRadius: 16, padding: "12px 16px", border: "1px solid rgba(36,39,54,.08)" }}>
-            <p style={{ margin: 0, fontWeight: 800, color: C.teal, fontSize: 15 }}>Bien</p>
+            <p style={{ margin: 0, fontWeight: 800, color: C.teal, fontSize: 15 }}>Me acuerdo</p>
             <p style={{ margin: "2px 0 0", fontSize: 14, color: "rgba(36,39,54,.7)", fontWeight: 600 }}>Lo recordaste sin grandes dificultades.</p>
           </div>
           <div style={{ background: C.white, borderRadius: 16, padding: "12px 16px", border: "1px solid rgba(36,39,54,.08)" }}>
@@ -964,7 +990,7 @@ function HowItWorksModal({ onClose }) {
             <p style={{ margin: "2px 0 0", fontSize: 14, color: "rgba(36,39,54,.7)", fontWeight: 600 }}>Lo recordaste, pero necesitaste más tiempo, pistas o esfuerzo.</p>
           </div>
           <div style={{ background: C.white, borderRadius: 16, padding: "12px 16px", border: "1px solid rgba(36,39,54,.08)" }}>
-            <p style={{ margin: 0, fontWeight: 800, color: C.pink, fontSize: 15 }}>No lo recordé</p>
+            <p style={{ margin: 0, fontWeight: 800, color: C.pink, fontSize: 15 }}>No me acuerdo</p>
             <p style={{ margin: "2px 0 0", fontSize: 14, color: "rgba(36,39,54,.7)", fontWeight: 600 }}>La respuesta no apareció esta vez.</p>
           </div>
         </div>
@@ -992,7 +1018,7 @@ function HowItWorksModal({ onClose }) {
           Olvidar también forma parte del proceso.
         </p>
         <p style={{ fontSize: 15, color: "rgba(36,39,54,.78)", fontWeight: 600, lineHeight: 1.6, margin: "0 0 8px" }}>
-          Cuando eliges <em>No lo recordé</em>, no estás retrocediendo ni empezando desde cero. Solo le estás mostrando al sistema que ese contenido necesita volver un poco antes.
+          Cuando eliges <em>No me acuerdo</em>, no estás retrocediendo ni empezando desde cero. Solo le estás mostrando al sistema que ese contenido necesita volver un poco antes.
         </p>
         <p style={{ fontSize: 15, color: "rgba(36,39,54,.78)", fontWeight: 600, lineHeight: 1.6, margin: "0 0 0" }}>
           Tu Cuaderno no está aquí para ponerte a prueba. Está aquí para ayudarte a mantener vivo tu español.
@@ -1251,6 +1277,16 @@ function Review({ card, deck, total, graduated, remainingSec, mode, onToggleMode
   const minsLeft = remainingSec != null ? Math.ceil(remainingSec / 60) : null;
   const expected = fullAnswer(card);
   const isPersonal = card.type === "frase_personal";
+  const cardBoxStyle = { background: C.creamSoft, borderRadius: 28, padding: "26px 24px", boxShadow: "0 14px 40px rgba(36,39,54,.09)", border: "1px solid rgba(36,39,54,.06)" };
+
+  const evalButtons = (
+    <div className="cv-evalrow" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8 }}>
+      <EvalBtn color={C.navy} label="Fácil" onClick={() => onRate("easy")} />
+      <EvalBtn color={C.teal} label="Me acuerdo" onClick={() => onRate("good")} />
+      <EvalBtn color={C.orange} label="Difícil" onClick={() => onRate("hard")} />
+      <EvalBtn color={C.pink} label="No me acuerdo" onClick={() => onRate("again")} />
+    </div>
+  );
 
   return (
     <div className="cv-pad" style={{ maxWidth: 620, margin: "0 auto", padding: "22px 32px 44px" }}>
@@ -1276,48 +1312,73 @@ function Review({ card, deck, total, graduated, remainingSec, mode, onToggleMode
         <Hopscotch total={total} graduated={graduated} />
       </div>
 
-      <div key={card.id} className="cv-fade" style={{ background: C.creamSoft, borderRadius: 28, padding: "26px 24px", boxShadow: "0 14px 40px rgba(36,39,54,.09)", border: "1px solid rgba(36,39,54,.06)" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}>
-          <span className="cv-chip" style={{ background: accent, color: card.type === "hueco" ? C.navy : C.white }}>{TYPE_LABEL[card.type]}</span>
-          <span style={{ fontSize: 13, fontWeight: 700, color: "rgba(36,39,54,.5)" }}>{TYPE_HINT[card.type]}</span>
-        </div>
-
-        <p style={{ fontSize: "clamp(21px,5vw,26px)", fontWeight: 800, color: C.navy, margin: "0 0 20px", lineHeight: 1.3 }}>
-          {card.front}
-        </p>
-
-        {!revealed && !isFlashcard && !isChoice && (
-          <textarea className="cv-input" placeholder="Escribe tu respuesta (opcional)" value={userAnswer} onChange={(e) => onAnswer(e.target.value)} rows={2} />
-        )}
-
-        {!revealed && !isFlashcard && isChoice && (
-          <div style={{ display: "grid", gap: 10 }}>
-            {card.choices.map((ch, i) => (
-              <button
-                key={i}
-                className="cv-tap"
-                onClick={() => onPick(ch)}
-                style={{
-                  textAlign: "left", padding: "14px 16px", borderRadius: 16, fontWeight: 700, fontSize: 16,
-                  border: `2px solid ${picked === ch ? C.teal : "rgba(36,39,54,.16)"}`,
-                  background: picked === ch ? "rgba(108,167,183,.14)" : C.white, color: C.navy,
-                }}
-              >
-                {ch}
+      {isFlashcard ? (
+        <div key={card.id} className={"cv-fade cv-flip" + (revealed ? " cv-flipped" : "")}>
+          <div className="cv-flip-card">
+            <div className="cv-flip-face cv-flip-front" style={cardBoxStyle}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}>
+                <span className="cv-chip" style={{ background: accent, color: card.type === "hueco" ? C.navy : C.white }}>{TYPE_LABEL[card.type]}</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: "rgba(36,39,54,.5)" }}>{TYPE_HINT[card.type]}</span>
+              </div>
+              <p style={{ fontSize: "clamp(21px,5vw,26px)", fontWeight: 800, color: C.navy, margin: "0 0 20px", lineHeight: 1.3 }}>
+                {card.front}
+              </p>
+              <button className="cv-btn" onClick={onReveal} style={{ width: "100%", marginTop: 18, padding: 16, fontSize: 17, background: C.navy, color: C.white }}>
+                Ver respuesta
               </button>
-            ))}
+            </div>
+            <div className="cv-flip-face cv-flip-back" style={cardBoxStyle}>
+              <div style={{ background: "rgba(108,167,183,.16)", borderRadius: 18, padding: "16px 18px" }}>
+                <p style={{ margin: 0, fontSize: 12, fontWeight: 800, color: C.teal, textTransform: "uppercase", letterSpacing: 1 }}>{isPersonal ? "Un modelo" : "Respuesta esperada"}</p>
+                <p style={{ margin: "4px 0 0", fontSize: 20, fontWeight: 800, color: C.navy, lineHeight: 1.45 }}>{expected}</p>
+              </div>
+              <p style={{ textAlign: "center", fontWeight: 800, color: C.navy, margin: "24px 0 12px", fontSize: 16 }}>¿Cómo lo sentiste?</p>
+              {evalButtons}
+            </div>
           </div>
-        )}
+        </div>
+      ) : (
+        <div key={card.id} className="cv-fade" style={cardBoxStyle}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}>
+            <span className="cv-chip" style={{ background: accent, color: card.type === "hueco" ? C.navy : C.white }}>{TYPE_LABEL[card.type]}</span>
+            <span style={{ fontSize: 13, fontWeight: 700, color: "rgba(36,39,54,.5)" }}>{TYPE_HINT[card.type]}</span>
+          </div>
 
-        {!revealed && (
-          <button className="cv-btn" onClick={onReveal} style={{ width: "100%", marginTop: 18, padding: 16, fontSize: 17, background: C.navy, color: C.white }}>
-            Ver respuesta
-          </button>
-        )}
+          <p style={{ fontSize: "clamp(21px,5vw,26px)", fontWeight: 800, color: C.navy, margin: "0 0 20px", lineHeight: 1.3 }}>
+            {card.front}
+          </p>
 
-        {revealed && (
-          <div className="cv-fade">
-            {!isFlashcard && (
+          {!revealed && !isChoice && (
+            <textarea className="cv-input" placeholder="Escribe tu respuesta (opcional)" value={userAnswer} onChange={(e) => onAnswer(e.target.value)} rows={2} />
+          )}
+
+          {!revealed && isChoice && (
+            <div style={{ display: "grid", gap: 10 }}>
+              {card.choices.map((ch, i) => (
+                <button
+                  key={i}
+                  className="cv-tap"
+                  onClick={() => onPick(ch)}
+                  style={{
+                    textAlign: "left", padding: "14px 16px", borderRadius: 16, fontWeight: 700, fontSize: 16,
+                    border: `2px solid ${picked === ch ? C.teal : "rgba(36,39,54,.16)"}`,
+                    background: picked === ch ? "rgba(108,167,183,.14)" : C.white, color: C.navy,
+                  }}
+                >
+                  {ch}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {!revealed && (
+            <button className="cv-btn" onClick={onReveal} style={{ width: "100%", marginTop: 18, padding: 16, fontSize: 17, background: C.navy, color: C.white }}>
+              Ver respuesta
+            </button>
+          )}
+
+          {revealed && (
+            <div className="cv-fade">
               <div style={{ background: C.white, border: "2px solid rgba(36,39,54,.14)", borderRadius: 18, padding: "14px 18px", marginBottom: 10 }}>
                 <p style={{ margin: 0, fontSize: 12, fontWeight: 800, color: "rgba(36,39,54,.5)", textTransform: "uppercase", letterSpacing: 1 }}>Tu respuesta</p>
                 {String(myAnswer || "").trim() ? (
@@ -1326,30 +1387,25 @@ function Review({ card, deck, total, graduated, remainingSec, mode, onToggleMode
                   <p style={{ margin: "4px 0 0", fontSize: 18, fontWeight: 700, fontStyle: "italic", color: "rgba(36,39,54,.42)" }}>— la dijiste en voz alta</p>
                 )}
               </div>
-            )}
 
-            <div style={{ background: "rgba(108,167,183,.16)", borderRadius: 18, padding: "16px 18px", marginBottom: card.example ? 12 : 0 }}>
-              <p style={{ margin: 0, fontSize: 12, fontWeight: 800, color: C.teal, textTransform: "uppercase", letterSpacing: 1 }}>{isPersonal ? "Un modelo" : "Respuesta esperada"}</p>
-              <p style={{ margin: "4px 0 0", fontSize: 20, fontWeight: 800, color: C.navy, lineHeight: 1.45 }}>{expected}</p>
-            </div>
-
-            {card.example && (
-              <div style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "0 4px" }}>
-                <span className="cv-chip" style={{ background: C.pink, color: C.white, flex: "0 0 auto" }}>Ejemplo</span>
-                <p style={{ margin: 0, fontSize: 15, fontStyle: "italic", color: "rgba(36,39,54,.82)" }}>{card.example}</p>
+              <div style={{ background: "rgba(108,167,183,.16)", borderRadius: 18, padding: "16px 18px", marginBottom: card.example ? 12 : 0 }}>
+                <p style={{ margin: 0, fontSize: 12, fontWeight: 800, color: C.teal, textTransform: "uppercase", letterSpacing: 1 }}>{isPersonal ? "Un modelo" : "Respuesta esperada"}</p>
+                <p style={{ margin: "4px 0 0", fontSize: 20, fontWeight: 800, color: C.navy, lineHeight: 1.45 }}>{expected}</p>
               </div>
-            )}
 
-            <p style={{ textAlign: "center", fontWeight: 800, color: C.navy, margin: "24px 0 12px", fontSize: 16 }}>¿Cómo lo sentiste?</p>
-            <div className="cv-evalrow" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8 }}>
-              <EvalBtn color={C.pink} label="No lo sé" onClick={() => onRate("again")} />
-              <EvalBtn color={C.orange} label="Difícil" onClick={() => onRate("hard")} />
-              <EvalBtn color={C.teal} label="Lo sé" onClick={() => onRate("good")} />
-              <EvalBtn color={C.navy} label="Fácil" onClick={() => onRate("easy")} />
+              {card.example && (
+                <div style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "0 4px" }}>
+                  <span className="cv-chip" style={{ background: C.pink, color: C.white, flex: "0 0 auto" }}>Ejemplo</span>
+                  <p style={{ margin: 0, fontSize: 15, fontStyle: "italic", color: "rgba(36,39,54,.82)" }}>{card.example}</p>
+                </div>
+              )}
+
+              <p style={{ textAlign: "center", fontWeight: 800, color: C.navy, margin: "24px 0 12px", fontSize: 16 }}>¿Cómo lo sentiste?</p>
+              {evalButtons}
             </div>
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

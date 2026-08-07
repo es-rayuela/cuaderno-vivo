@@ -950,53 +950,62 @@ function HowItWorksModal({ onClose }) {
           Aquí vas a reencontrarte con palabras, expresiones y estructuras que ya aparecieron en tu recorrido. No se trata de memorizarlo todo de una vez, sino de volver a cada contenido en el momento adecuado.
         </p>
 
-        <h3 className="cv-display" style={{ fontSize: 20, color: C.pink, margin: "22px 0 8px" }}>Flashcard o Escritura</h3>
+        <h3 className="cv-display" style={{ fontSize: 20, color: C.pink, margin: "22px 0 8px" }}>Elige cómo quieres repasar</h3>
         <p style={{ fontSize: 15, color: "rgba(36,39,54,.78)", fontWeight: 600, lineHeight: 1.6, margin: "0 0 12px" }}>
-          Antes de repasar, eliges cómo quieres hacerlo. Puedes cambiar de modo cuando quieras, sin perder tu progreso.
+          Antes de empezar, elige el modo que prefieras: <em>Flashcard</em> o <em>Escritura</em>. Puedes cambiar de uno a otro cuando quieras sin perder tu progreso.
         </p>
         <div style={{ display: "grid", gap: 10, marginBottom: 12 }}>
           <div style={{ background: C.white, borderRadius: 16, padding: "12px 16px", border: "1px solid rgba(36,39,54,.08)" }}>
             <p style={{ margin: 0, fontWeight: 800, color: C.navy, fontSize: 15, textTransform: "uppercase", letterSpacing: 0.5 }}>Flashcard</p>
-            <p style={{ margin: "2px 0 0", fontSize: 14, color: "rgba(36,39,54,.7)", fontWeight: 600 }}>Pienso la respuesta y giro la tarjeta.</p>
+            <p style={{ margin: "2px 0 0", fontSize: 14, color: "rgba(36,39,54,.7)", fontWeight: 600 }}>Piensa la respuesta y, cuando estés lista/o, pulsa «Ver respuesta» para girar la tarjeta, como si fuera una tarjeta física.</p>
           </div>
           <div style={{ background: C.white, borderRadius: 16, padding: "12px 16px", border: "1px solid rgba(36,39,54,.08)" }}>
             <p style={{ margin: 0, fontWeight: 800, color: C.navy, fontSize: 15, textTransform: "uppercase", letterSpacing: 0.5 }}>Escritura</p>
-            <p style={{ margin: "2px 0 0", fontSize: 14, color: "rgba(36,39,54,.7)", fontWeight: 600 }}>Escribo mi respuesta y después la comparo.</p>
+            <p style={{ margin: "2px 0 0", fontSize: 14, color: "rgba(36,39,54,.7)", fontWeight: 600 }}>Escribe tu respuesta y confírmala. Después podrás verla junto a la respuesta esperada para compararlas.</p>
           </div>
         </div>
         <p style={{ fontSize: 15, color: "rgba(36,39,54,.78)", fontWeight: 600, lineHeight: 1.6, margin: "0 0 0" }}>
-          En Flashcard, la tarjeta se da vuelta al pulsar «Ver respuesta», como una tarjeta física. En Escritura, después de confirmar tu respuesta ves lo que escribiste junto a la respuesta esperada. En ningún caso el Cuaderno te dice si estuviste bien o mal: eres tú quien compara y decide cómo lo sentiste.
+          En ninguno de los dos modos el Cuaderno te dirá automáticamente si tu respuesta está bien o mal. La comparación la haces tú: observas qué recordaste, qué faltó y cuánto esfuerzo necesitaste.
         </p>
 
-        <h3 className="cv-display" style={{ fontSize: 20, color: C.pink, margin: "22px 0 8px" }}>¿Cómo funciona?</h3>
+        <h3 className="cv-display" style={{ fontSize: 20, color: C.pink, margin: "22px 0 8px" }}>¿Cómo funciona el repaso?</h3>
         <p style={{ fontSize: 15, color: "rgba(36,39,54,.78)", fontWeight: 600, lineHeight: 1.6, margin: "0 0 8px" }}>
-          Cuando aparezca una tarjeta, intenta recordar la respuesta antes de verla.
+          Cada vez que aparezca una tarjeta, intenta recuperar la respuesta antes de consultar la solución.
+        </p>
+        <p style={{ fontSize: 15, color: "rgba(36,39,54,.78)", fontWeight: 600, lineHeight: 1.6, margin: "0 0 8px" }}>
+          En <em>Flashcard</em>, piensa la respuesta y después gira la tarjeta.
+        </p>
+        <p style={{ fontSize: 15, color: "rgba(36,39,54,.78)", fontWeight: 600, lineHeight: 1.6, margin: "0 0 8px" }}>
+          En <em>Escritura</em>, escribe lo que recuerdas y, al confirmar, compara tu respuesta con la esperada.
         </p>
         <p style={{ fontSize: 15, color: "rgba(36,39,54,.78)", fontWeight: 600, lineHeight: 1.6, margin: "0 0 12px" }}>
-          Después, elige el botón que mejor represente lo que pasó:
+          Después, elige el botón que mejor describa cómo fue recordar ese contenido en ese momento:
         </p>
 
         <div style={{ display: "grid", gap: 10, marginBottom: 12 }}>
           <div style={{ background: C.white, borderRadius: 16, padding: "12px 16px", border: "1px solid rgba(36,39,54,.08)" }}>
             <p style={{ margin: 0, fontWeight: 800, color: C.teal, fontSize: 15 }}>Fácil</p>
-            <p style={{ margin: "2px 0 0", fontSize: 14, color: "rgba(36,39,54,.7)", fontWeight: 600 }}>Lo recordaste enseguida y sientes que ya está bastante firme.</p>
+            <p style={{ margin: "2px 0 0", fontSize: 14, color: "rgba(36,39,54,.7)", fontWeight: 600 }}>La respuesta apareció enseguida y sientes que el contenido ya está bastante firme.</p>
           </div>
           <div style={{ background: C.white, borderRadius: 16, padding: "12px 16px", border: "1px solid rgba(36,39,54,.08)" }}>
             <p style={{ margin: 0, fontWeight: 800, color: C.teal, fontSize: 15 }}>Me acuerdo</p>
-            <p style={{ margin: "2px 0 0", fontSize: 14, color: "rgba(36,39,54,.7)", fontWeight: 600 }}>Lo recordaste sin grandes dificultades.</p>
+            <p style={{ margin: "2px 0 0", fontSize: 14, color: "rgba(36,39,54,.7)", fontWeight: 600 }}>Recordaste la respuesta sin grandes dificultades.</p>
           </div>
           <div style={{ background: C.white, borderRadius: 16, padding: "12px 16px", border: "1px solid rgba(36,39,54,.08)" }}>
             <p style={{ margin: 0, fontWeight: 800, color: C.orange, fontSize: 15 }}>Difícil</p>
-            <p style={{ margin: "2px 0 0", fontSize: 14, color: "rgba(36,39,54,.7)", fontWeight: 600 }}>Lo recordaste, pero necesitaste más tiempo, pistas o esfuerzo.</p>
+            <p style={{ margin: "2px 0 0", fontSize: 14, color: "rgba(36,39,54,.7)", fontWeight: 600 }}>Lograste responder, pero necesitaste más tiempo, esfuerzo o alguna pista.</p>
           </div>
           <div style={{ background: C.white, borderRadius: 16, padding: "12px 16px", border: "1px solid rgba(36,39,54,.08)" }}>
             <p style={{ margin: 0, fontWeight: 800, color: C.pink, fontSize: 15 }}>No me acuerdo</p>
-            <p style={{ margin: "2px 0 0", fontSize: 14, color: "rgba(36,39,54,.7)", fontWeight: 600 }}>La respuesta no apareció esta vez.</p>
+            <p style={{ margin: "2px 0 0", fontSize: 14, color: "rgba(36,39,54,.7)", fontWeight: 600 }}>Esta vez, no lograste recuperar la respuesta.</p>
           </div>
         </div>
 
+        <p style={{ fontSize: 15, color: "rgba(36,39,54,.78)", fontWeight: 600, lineHeight: 1.6, margin: "0 0 8px" }}>
+          No hace falta evaluar si tu respuesta fue exactamente igual a la esperada ni pensar demasiado antes de elegir. Ten en cuenta cuánto recordaste y cómo fue el proceso de llegar a la respuesta.
+        </p>
         <p style={{ fontSize: 15, color: "rgba(36,39,54,.78)", fontWeight: 600, lineHeight: 1.6, margin: "0 0 0" }}>
-          No hace falta pensarlo demasiado. Elige la opción que mejor describa cómo fue recordar ese contenido en ese momento.
+          A partir de tu elección, el Cuaderno organiza las próximas revisiones para que cada contenido vuelva a aparecer cuando más lo necesites.
         </p>
 
         <h3 className="cv-display" style={{ fontSize: 20, color: C.pink, margin: "22px 0 8px" }}>¿Qué pasa después?</h3>
@@ -1270,8 +1279,7 @@ function Lock({ onUnlock, onBack }) {
    REVIEW — un desafío a la vez
    ============================================================ */
 function Review({ card, deck, total, graduated, remainingSec, mode, onToggleMode, revealed, userAnswer, picked, onAnswer, onPick, onReveal, onRate, onExit }) {
-  const accent = TYPE_COLOR[card.type] || C.teal;
-  const isChoice = card.type === "eleccion" && Array.isArray(card.choices);
+  const isChoice = card.type === "eleccion" && Array.isArray(card.choices) && card.choices.length >= 2;
   const isFlashcard = mode === "flashcard";
   const myAnswer = isChoice ? picked : userAnswer;
   const minsLeft = remainingSec != null ? Math.ceil(remainingSec / 60) : null;
@@ -1316,10 +1324,6 @@ function Review({ card, deck, total, graduated, remainingSec, mode, onToggleMode
         <div key={card.id} className={"cv-fade cv-flip" + (revealed ? " cv-flipped" : "")}>
           <div className="cv-flip-card">
             <div className="cv-flip-face cv-flip-front" style={cardBoxStyle}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}>
-                <span className="cv-chip" style={{ background: accent, color: card.type === "hueco" ? C.navy : C.white }}>{TYPE_LABEL[card.type]}</span>
-                <span style={{ fontSize: 13, fontWeight: 700, color: "rgba(36,39,54,.5)" }}>{TYPE_HINT[card.type]}</span>
-              </div>
               <p style={{ fontSize: "clamp(21px,5vw,26px)", fontWeight: 800, color: C.navy, margin: "0 0 20px", lineHeight: 1.3 }}>
                 {card.front}
               </p>
@@ -1339,11 +1343,6 @@ function Review({ card, deck, total, graduated, remainingSec, mode, onToggleMode
         </div>
       ) : (
         <div key={card.id} className="cv-fade" style={cardBoxStyle}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}>
-            <span className="cv-chip" style={{ background: accent, color: card.type === "hueco" ? C.navy : C.white }}>{TYPE_LABEL[card.type]}</span>
-            <span style={{ fontSize: 13, fontWeight: 700, color: "rgba(36,39,54,.5)" }}>{TYPE_HINT[card.type]}</span>
-          </div>
-
           <p style={{ fontSize: "clamp(21px,5vw,26px)", fontWeight: 800, color: C.navy, margin: "0 0 20px", lineHeight: 1.3 }}>
             {card.front}
           </p>
@@ -1775,6 +1774,9 @@ function parseImportJson(raw) {
     if (!item || typeof item !== "object") return { error: "La estructura del archivo no es la esperada" };
     if (!TYPES.includes(item.type)) return { error: "La estructura del archivo no es la esperada" };
     if (!item.front || !item.answer) return { error: "La estructura del archivo no es la esperada" };
+    if (item.type === "eleccion" && (!Array.isArray(item.choices) || item.choices.length < 2)) {
+      return { error: "Hay una tarjeta de Elección sin al menos 2 opciones (\"choices\")" };
+    }
     norm.push({
       id: item.id || uid(),
       type: item.type,
@@ -1783,7 +1785,7 @@ function parseImportJson(raw) {
       note: item.note ? String(item.note) : "",
       example: item.example ? String(item.example) : "",
       tags: Array.isArray(item.tags) ? item.tags : [],
-      ...(item.type === "eleccion" && Array.isArray(item.choices) ? { choices: item.choices } : {}),
+      ...(item.type === "eleccion" ? { choices: item.choices } : {}),
       ...(item.hints && typeof item.hints === "object" ? { hints: item.hints } : {}),
       schedule: freshSchedule(),
     });
